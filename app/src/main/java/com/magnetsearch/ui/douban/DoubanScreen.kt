@@ -35,21 +35,21 @@ import com.magnetsearch.ui.theme.*
 @Composable
 fun DoubanScreen(
     onMagnetSearch: (String) -> Unit,
-    viewModel: DoubanViewModel = viewModel()
+    vm: DoubanViewModel = viewModel()
 ) {
-    val state by viewModel.uiState.collectAsState()
+    val state by vm.uiState.collectAsState()
     val context = LocalContext.current
     var searchText by remember { mutableStateOf("") }
 
     // ========== 详情页 ==========
     if (state.selectedMovie != null) {
-        BackHandler { viewModel.backToList() }
+        BackHandler { vm.backToList() }
         DoubanDetailScreen(
             movie = state.selectedMovie!!,
             detail = state.detail,
             detailLoading = state.detailLoading,
             detailError = state.detailError,
-            onBack = { viewModel.backToList() },
+            onBack = { vm.backToList() },
             onSearch = { onMagnetSearch(it) },
             onOpenDouban = {
                 state.selectedMovie?.doubanUrl?.let { url ->
@@ -87,7 +87,7 @@ fun DoubanScreen(
                     singleLine = true,
                     leadingIcon = { Icon(Icons.Default.Search, null) }
                 )
-                Button(onClick = { if (searchText.isNotBlank()) viewModel.search(searchText) }) {
+                Button(onClick = { if (searchText.isNotBlank()) vm.search(searchText) }) {
                     Text("搜索")
                 }
             }
@@ -97,7 +97,7 @@ fun DoubanScreen(
                     .padding(horizontal = 12.dp),
                 horizontalArrangement = Arrangement.End
             ) {
-                OutlinedButton(onClick = { viewModel.loadTop250() }) {
+                OutlinedButton(onClick = { vm.loadTop250() }) {
                     Icon(Icons.Default.Home, null, modifier = Modifier.width(16.dp))
                     Spacer(Modifier.width(4.dp))
                     Text("豆瓣 Top 250")
@@ -125,7 +125,7 @@ fun DoubanScreen(
                             MovieCard(
                                 movie = movie,
                                 onSearch = { onMagnetSearch(it) },
-                                onClick = { viewModel.selectMovie(movie) }
+                                onClick = { vm.selectMovie(movie) }
                             )
                         }
                         item {
@@ -148,7 +148,7 @@ fun DoubanScreen(
 
     LaunchedEffect(Unit) {
         if (state.movies.isEmpty() && !state.isLoading) {
-            viewModel.loadTop250()
+            vm.loadTop250()
         }
     }
 }
