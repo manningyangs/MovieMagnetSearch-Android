@@ -285,9 +285,19 @@ class DoubanRepository {
         }
         val d = DoubanDetail(doubanId = doubanId, doubanUrl = url)
 
-                // 标题 + 年份
+                // 标题 + 年份 + 英文原名
                 doc.selectFirst("#content h1 span[property='v:itemreviewed']")?.let { d.title = it.text().trim() }
                 doc.selectFirst("#content h1 .year")?.text()?.trim()?.let { d.year = it.removeSurrounding("(", ")") }
+                // 从 h1 的其他 span 中提取英文原名，通常格式为 " / Titanic"
+                doc.select("#content h1 span")
+                    .firstOrNull { span ->
+                        span.attr("property") != "v:itemreviewed"
+                            && !span.hasClass("year")
+                            && span.attr("class") != "year"
+                    }?.let { span ->
+                        val t = span.text().trim().removePrefix("/").trim().removePrefix("/").trim()
+                        if (t.isNotBlank()) d.originalTitle = t
+                    }
 
                 // 评分 + 评价人数
                 doc.selectFirst(".rating_num[property='v:average']")?.text()?.toFloatOrNull()?.let { d.rating = it }

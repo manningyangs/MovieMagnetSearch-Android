@@ -22,7 +22,8 @@ data class MagnetUiState(
     val error: String? = null,
     val enabledSources: Set<SearchSource> = SearchSource.all().toSet(),
     val qualityFilter: QualityFilter = QualityFilter.ALL,
-    val sortBy: SortBy = SortBy.SEEDERS
+    val sortBy: SortBy = SortBy.SEEDERS,
+    val translatedQuery: String? = null   // 中文→英文翻译结果，UI 用于提示用户
 )
 
 class MagnetViewModel(application: Application) : AndroidViewModel(application) {
@@ -74,13 +75,19 @@ class MagnetViewModel(application: Application) : AndroidViewModel(application) 
 
     fun search(query: String, mediaType: MediaType = MediaType.MOVIE) {
         val sources = _uiState.value.enabledSources.toList()
-        _uiState.value = _uiState.value.copy(isLoading = true, error = null)
+        // 关键：再次搜索时先清空上一次的结果 —— 否则旧结果会一直显示到新请求返回（期间可能 10s+）
+        _uiState.value = _uiState.value.copy(
+            isLoading = true, error = null,
+            rawResults = emptyList(), filteredResults = emptyList(),
+            translatedQuery = null
+        )
         viewModelScope.launch {
             runCatching { repo.search(query, mediaType, sources) }
-                .onSuccess { results ->
+                .onSuccess { result ->
                     _uiState.value = _uiState.value.copy(
-                        rawResults = results,
-                        filteredResults = results,
+                        rawResults = result.results,
+                        filteredResults = result.results,
+                        translatedQuery = result.translatedQuery,
                         isLoading = false
                     )
                     reapplyFilter()

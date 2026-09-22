@@ -3,11 +3,12 @@ package com.magnetsearch.data.repository
 import com.magnetsearch.data.api.HttpClient
 import com.magnetsearch.data.model.MediaType
 import com.magnetsearch.data.model.MagnetResult
+import com.magnetsearch.data.model.MagnetSearchResult
 import com.magnetsearch.data.model.SearchSource
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
-import kotlinx.coroutines.awaitAll
 import kotlinx.coroutines.withContext
+import kotlinx.coroutines.withTimeout
 import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
@@ -16,52 +17,207 @@ import java.net.URLEncoder
 
 /** 磁力搜索：多源并发 + 结果合并。
  *
- *  关键修复（对比桌面版）：
- *  1) PirateBay 用 apibay.org JSON API（不再爬 HTML），自然返回 ~100 条
- *  2) YTS limit=50（之前 10 → 少 5 倍！），多域 fallback
- *  3) 1337x 两步：搜索页取详情链接 → 详情页抓磁链，取前 15 条详情
- *  4) BT之家（新增）：1lou.me Discuz 论坛，中文内容多
- *  5) bt client UA 桌面 Chrome（不是 Android Mobile）
- *  6) Nyaa.si 保持全分类
+ *  每个源的条数上限：
+ *  - PirateBay: apibay.org 不限（通常 ~100）
+ *  - YTS: limit=50（多 quality 版本会更多）
+ *  - Nyaa.si: 页面默认 ~75
+ *  - 1337x: 最多 25（两步抓取，控制请求量）
+ *  - BT之家: 最多 25（两步抓取，多域 fallback）
  */
 class MagnetRepository {
 
     private val YTS_DOMAINS = listOf("yts.ag", "yts.lt", "yts.mx")
-    private val BTBTT_BASE = "https://www.1lou.me"
+
+    // BT之家：两个中文 Discuz 论坛（同一模板），哪个通用哪个
+    private val BTBTT_DOMAINS = listOf(
+        "https://www.1lou.me",
+        "https://dyttt.me"
+    )
+
+    private fun encode(s: String): String =
+        URLEncoder.encode(s, "UTF-8").replace("+", "%20")
+
+    private val hasChineseRegex = Regex("""[\u4e00-\u9fff]""")
+
+    // 搜索源分类：中文源直接用中文 query，英文源需先翻译
+    private val CHINESE_SOURCES = setOf(SearchSource.BTBTT)
+    private val ENGLISH_SOURCES = setOf(
+        SearchSource.PIRATE_BAY, SearchSource.YTS,
+        SearchSource.NYAA, SearchSource.ONE337X
+    )
+
+    /** 通过维基百科 API 把中文片名翻译成英文。
+     *  5s 超时，避免大陆网络环境下被墙卡住。
+     *  返回翻译后的英文标题（已去除括号内容），失败返回 null。 */
+    private suspend fun translateChineseTitleViaWiki(query: String): String? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                withTimeout(5000L) {
+                    // 先搜 "片名 电影" 提高匹配度，无结果再降级搜裸片名
+                    val candidates = listOf("$query 电影", query)
+                    for (candidate in candidates) {
+                        val url = "https://zh.wikipedia.org/w/api.php?action=query" +
+                            "&generator=search" +
+                            "&gsrsearch=${encode(candidate)}" +
+                            "&gsrnamespace=0" +
+                            "&gsrlimit=1" +
+                            "&prop=langlinks" +
+                            "&lllang=en" +
+                            "&lllimit=1" +
+                            "&format=json"
+                        val req = Request.Builder().url(url)
+                            .header("User-Agent", "MagnetSearchAndroid/1.0 (mobile app)")
+                            .header("Accept-Language", "zh-CN,zh;q=0.9")
+                            .get().build()
+                        val result = runCatching {
+                            HttpClient.bt.newCall(req).execute().use { resp ->
+                                if (!resp.isSuccessful) return@use null
+                                val body = resp.body?.string() ?: return@use null
+                                val pages = JSONObject(body)
+                                    .optJSONObject("query")?.optJSONObject("pages")
+                                    ?: return@use null
+                                val key = pages.keys().next()
+                                if (key == "-1") return@use null
+                                val page = pages.optJSONObject(key) ?: return@use null
+                                val langlinks = page.optJSONArray("langlinks") ?: return@use null
+                                if (langlinks.length() == 0) return@use null
+                                val enTitle = langlinks.getJSONObject(0)
+                                    .optString("*", "").trim().ifBlank { null }
+                                    ?: return@use null
+                                Regex("""\s*\([^)]*\)""").replace(enTitle, "").trim().ifBlank { null }
+                            }
+                        }.getOrNull()
+                        if (result != null) {
+                            android.util.Log.d("MagnetRepo", "Wiki: '$query' → '$result'")
+                            return@withTimeout result
+                        }
+                    }
+                    null
+                }
+            }.getOrNull()
+        }
+
+    /** 通过豆瓣 subject_suggest API 把中文片名翻译成英文。
+     *  豆瓣本身返回 sub_title 字段就是英文原名。
+     *  比维基更快，大陆可达性更好。 */
+    private suspend fun translateChineseTitleViaDouban(query: String): String? =
+        withContext(Dispatchers.IO) {
+            runCatching {
+                val url = "https://movie.douban.com/j/subject_suggest?q=${encode(query)}"
+                val req = Request.Builder().url(url)
+                    .header("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36")
+                    .header("Referer", "https://movie.douban.com/")
+                    .header("X-Requested-With", "XMLHttpRequest")
+                    .get().build()
+                HttpClient.douban.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use null
+                    val body = resp.body?.string() ?: return@use null
+                    val arr = JSONArray(body)
+                    for (i in 0 until arr.length()) {
+                        val item = arr.getJSONObject(i)
+                        val subTitle = item.optString("sub_title", "").trim()
+                        if (subTitle.isNotBlank() && !hasChineseRegex.containsMatchIn(subTitle)) {
+                            android.util.Log.d("MagnetRepo", "Douban: '$query' → '$subTitle'")
+                            return@use subTitle
+                        }
+                    }
+                    null
+                }
+            }.getOrNull()
+        }
 
     suspend fun search(
         query: String,
         mediaType: MediaType = MediaType.MOVIE,
         sources: List<SearchSource> = listOf(SearchSource.PIRATE_BAY, SearchSource.NYAA)
-    ): List<MagnetResult> = withContext(Dispatchers.IO) {
-        if (query.isBlank()) return@withContext emptyList()
+    ): MagnetSearchResult = withContext(Dispatchers.IO) {
+        if (query.isBlank()) return@withContext MagnetSearchResult(emptyList(), null)
 
-        val tasks = sources.map { source ->
-            async {
+        val isChinese = hasChineseRegex.containsMatchIn(query)
+
+        // === 并发执行 ===
+        // 1) 中文源（BT之家）立即用原始中文 query 搜索，不阻塞
+        // 2) 同时维基 + 豆瓣并行翻译，谁先成功用谁
+        val chineseSources = sources.filter { it in CHINESE_SOURCES }
+        val englishSources = sources.filter { it in ENGLISH_SOURCES }
+
+        // Task A: 中文源立即搜索
+        val chineseResults = async {
+            chineseSources.map { source ->
                 runCatching {
                     when (source) {
-                        SearchSource.PIRATE_BAY -> searchPirateBay(query, mediaType)
-                        SearchSource.YTS -> searchYts(query)
-                        SearchSource.NYAA -> searchNyaa(query)
-                        SearchSource.ONE337X -> search1337x(query)
                         SearchSource.BTBTT -> searchBtbtt(query)
-                        SearchSource.ALL -> emptyList()
+                        else -> emptyList()
                     }
                 }.getOrElse { emptyList() }
             }
         }
 
-        val merged = tasks.awaitAll().flatten()
-        merged.distinctBy { r ->
+        // Task B: 翻译（中文才需要）
+        val translatedDeferred = if (isChinese) {
+            async {
+                // 两个都先发起（并行），但优先用豆瓣（更快、大陆可达）
+                val wikiTask = async { translateChineseTitleViaWiki(query) }
+                val doubanTask = async { translateChineseTitleViaDouban(query) }
+                // 先 await 豆瓣，豆瓣有结果直接返回，不用等维基 5s 超时
+                val doubanResult = doubanTask.await()
+                if (doubanResult != null) {
+                    // 取消维基任务，省一个没用的网络请求
+                    wikiTask.cancel()
+                    doubanResult
+                } else {
+                    // 豆瓣没结果，等维基
+                    wikiTask.await()
+                }
+            }
+        } else {
+            null
+        }
+
+        // === 等待中文源 + 翻译完成后，再发起英文源 ===
+        val chineseFlat = chineseResults.await().flatten()
+        val translatedEn = translatedDeferred?.await()
+
+        val englishResults = if (englishSources.isNotEmpty()) {
+            async {
+                val effectiveQuery = when {
+                    isChinese && translatedEn != null -> translatedEn
+                    isChinese -> null  // 翻译失败 → 英文源跳过
+                    else -> query
+                }
+                if (effectiveQuery == null) return@async emptyList<List<MagnetResult>>()
+
+                englishSources.map { source ->
+                    runCatching {
+                        when (source) {
+                            SearchSource.PIRATE_BAY -> searchPirateBay(effectiveQuery, mediaType)
+                            SearchSource.YTS -> searchYts(effectiveQuery)
+                            SearchSource.NYAA -> searchNyaa(effectiveQuery)
+                            SearchSource.ONE337X -> search1337x(effectiveQuery)
+                            else -> emptyList()
+                        }
+                    }.getOrElse { emptyList() }
+                }
+            }
+        } else {
+            async { emptyList<List<MagnetResult>>() }
+        }
+
+        val englishFlat = englishResults.await().flatten()
+
+        // === 合并去重 ===
+        val merged = chineseFlat + englishFlat
+        val dedup = merged.distinctBy { r ->
             val h = Regex("""btih:([a-fA-F0-9]{40})""").find(r.magnet)?.groupValues?.getOrNull(1)?.lowercase()
             h ?: r.magnet
         }
+        MagnetSearchResult(dedup, translatedEn)
     }
 
-    // ========== Pirate Bay（apibay.org JSON API，返回 ~100 条，稳定不被 Cloudflare 挡）==========
+    // ========== Pirate Bay（apibay.org JSON API，自然返回 ~100 条）==========
     private fun searchPirateBay(query: String, mediaType: MediaType): List<MagnetResult> {
         val cat = mediaType.pirateBayCategory
-        val url = "https://apibay.org/q.php?q=${URLEncoder.encode(query, "UTF-8")}&cat=$cat"
+        val url = "https://apibay.org/q.php?q=${encode(query)}&cat=$cat"
         val req = Request.Builder().url(url).get().build()
         return HttpClient.bt.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) return@use emptyList()
@@ -74,7 +230,7 @@ class MagnetRepository {
                 if (hash.isBlank()) continue
                 val name = item.optString("name").ifBlank { "Pirate Bay torrent" }
                 val sizeBytes = item.optLong("size", 0L)
-                val magnet = "magnet:?xt=urn:btih:$hash&dn=${URLEncoder.encode(name, "UTF-8")}"
+                val magnet = "magnet:?xt=urn:btih:$hash&dn=${encode(name)}"
                 out.add(
                     MagnetResult(
                         title = name, magnet = magnet,
@@ -92,7 +248,7 @@ class MagnetRepository {
     // ========== YTS（limit=50，多域 fallback）==========
     private fun searchYts(query: String): List<MagnetResult> {
         for (domain in YTS_DOMAINS) {
-            val url = "https://$domain/api/v2/list_movies.json?query_term=${URLEncoder.encode(query, "UTF-8")}&limit=50"
+            val url = "https://$domain/api/v2/list_movies.json?query_term=${encode(query)}&limit=50"
             val req = Request.Builder().url(url).get().build()
             val results = runCatching {
                 HttpClient.bt.newCall(req).execute().use { resp ->
@@ -112,7 +268,7 @@ class MagnetRepository {
                             val hash = t.optString("hash")
                             if (hash.isBlank()) continue
                             val quality = t.optString("quality")
-                            val magnet = "magnet:?xt=urn:btih:$hash&dn=${URLEncoder.encode(title, "UTF-8")}"
+                            val magnet = "magnet:?xt=urn:btih:$hash&dn=${encode(title)}"
                             out.add(
                                 MagnetResult(
                                     title = "$title [$quality]",
@@ -133,9 +289,9 @@ class MagnetRepository {
         return emptyList()
     }
 
-    // ========== Nyaa.si（全分类，返回页面默认条数）==========
+    // ========== Nyaa.si（全分类，页面默认 ~75 条）==========
     private fun searchNyaa(query: String): List<MagnetResult> {
-        val url = "https://nyaa.si/?f=0&c=0_0&q=${URLEncoder.encode(query, "UTF-8")}&p=1"
+        val url = "https://nyaa.si/?f=0&c=0_0&q=${encode(query)}&p=1"
         val req = Request.Builder().url(url).get().build()
         return HttpClient.bt.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) return@use emptyList()
@@ -158,9 +314,9 @@ class MagnetRepository {
         }
     }
 
-    // ========== 1337x（两步：搜索页取详情 → 详情页抓磁链，取前 15 条详情）==========
+    // ========== 1337x（两步：搜索页取详情 → 详情页抓磁链，前 25 条详情）==========
     private fun search1337x(query: String): List<MagnetResult> {
-        val searchUrl = "https://www.1337x.to/category-search/${URLEncoder.encode(query.replace(" ", "+"), "UTF-8")}/Movies/1/"
+        val searchUrl = "https://www.1337x.to/category-search/${encode(query.replace(" ", "+"))}/Movies/1/"
         val req = Request.Builder().url(searchUrl).get().build()
         val client = HttpClient.bt
         val detailLinks: List<String> = client.newCall(req).execute().use { resp ->
@@ -171,7 +327,7 @@ class MagnetRepository {
                 .mapNotNull { a -> a.attr("href").takeIf { it.isNotBlank() } }
         }
         val out = mutableListOf<MagnetResult>()
-        for (link in detailLinks.take(15)) {
+        for (link in detailLinks.take(25)) {
             val fullUrl = if (link.startsWith("http")) link else "https://www.1337x.to$link"
             runCatching {
                 val detailReq = Request.Builder().url(fullUrl).get().build()
@@ -188,23 +344,37 @@ class MagnetRepository {
         return out
     }
 
-    // ========== BT之家（1lou.me Discuz 论坛，搜索页 → 帖子页抓磁链，取前 15 条）==========
+    // ========== BT之家（中文 Discuz 论坛，多域 fallback，两个正则覆盖更多链接格式）==========
     private fun searchBtbtt(query: String): List<MagnetResult> {
-        val searchUrl = "$BTBTT_BASE/search.php?mod=forum&searchsubmit=yes&srchtxt=${URLEncoder.encode(query, "UTF-8")}"
+        for (base in BTBTT_DOMAINS) {
+            val results = runCatching { searchBtbttOnDomain(query, base) }.getOrNull() ?: emptyList()
+            if (results.isNotEmpty()) return results
+        }
+        return emptyList()
+    }
+
+    private fun searchBtbttOnDomain(query: String, base: String): List<MagnetResult> {
+        val searchUrl = "$base/search.php?mod=forum&searchsubmit=yes&srchtxt=${encode(query)}"
         val req = Request.Builder().url(searchUrl)
-            .header("Referer", BTBTT_BASE)
+            .header("Referer", base)
             .get().build()
         val client = HttpClient.bt
         val searchHtml: String = client.newCall(req).execute().use { resp ->
             if (!resp.isSuccessful) return emptyList()
             resp.body?.string() ?: return emptyList()
         }
-        // 提取帖子 tid：thread-NNN-N-N.html
+        // 两个正则覆盖 Discuz 常见链接格式：
+        // 1) thread-12345-1-1.html
+        // 2) forum.php?mod=viewthread&tid=12345
         val tids = LinkedHashSet<String>()
         Regex("""thread-(\d+)-\d+-\d+\.html""").findAll(searchHtml).forEach { tids.add(it.groupValues[1]) }
+        Regex("""forum\.php\?mod=viewthread&tid=(\d+)""").findAll(searchHtml).forEach { tids.add(it.groupValues[1]) }
+
+        if (tids.isEmpty()) return emptyList()
+
         val out = mutableListOf<MagnetResult>()
-        for (tid in tids.take(15)) {
-            val threadUrl = "$BTBTT_BASE/thread-$tid-1-1.html"
+        for (tid in tids.take(25)) {
+            val threadUrl = "$base/thread-$tid-1-1.html"
             runCatching {
                 val threadReq = Request.Builder().url(threadUrl).get().build()
                 client.newCall(threadReq).execute().use { resp ->

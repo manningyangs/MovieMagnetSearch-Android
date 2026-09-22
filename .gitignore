@@ -30,3 +30,6 @@ __pycache__/
 
 # Gradle local cache
 .gradle/
+
+# Local Gradle daemon JVM config
+gradle/gradle-daemon-jvm.properties

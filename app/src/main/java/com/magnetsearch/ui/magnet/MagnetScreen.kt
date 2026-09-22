@@ -127,6 +127,8 @@ fun MagnetScreen(
 
             // === 激活的筛选提示 ===
             val filterHints = buildList {
+                if (state.translatedQuery != null)
+                    add("已翻译为 ${state.translatedQuery}")
                 if (state.enabledSources.size != SearchSource.all().size)
                     add("已选 ${state.enabledSources.size}/${SearchSource.all().size} 源")
                 if (state.qualityFilter != QualityFilter.ALL)

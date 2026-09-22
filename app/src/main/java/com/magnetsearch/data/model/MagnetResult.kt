@@ -101,3 +101,9 @@ enum class SortBy(val displayName: String) {
         LEECHERS -> b.leechers.compareTo(a.leechers)
     }
 }
+
+/** 磁力搜索结果包装：包含翻译信息供 UI 展示。 */
+data class MagnetSearchResult(
+    val results: List<MagnetResult>,
+    val translatedQuery: String?   // 若输入是中文且成功翻译了英文，这里存翻译结果；否则为 null
+)
