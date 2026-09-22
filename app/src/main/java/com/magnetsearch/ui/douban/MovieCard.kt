@@ -1,6 +1,7 @@
 package com.magnetsearch.ui.douban
 
 import androidx.compose.foundation.Image
+import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.shape.RoundedCornerShape
@@ -17,6 +18,7 @@ import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import coil.compose.rememberAsyncImagePainter
+import com.magnetsearch.ImageLoaderHolder
 import com.magnetsearch.data.model.DoubanMovie
 import com.magnetsearch.ui.theme.*
 
@@ -26,6 +28,8 @@ fun MovieCard(
     onSearch: (String) -> Unit,
     modifier: Modifier = Modifier
 ) {
+    val context = androidx.compose.ui.platform.LocalContext.current
+
     Row(
         modifier = modifier
             .fillMaxWidth()
@@ -33,19 +37,31 @@ fun MovieCard(
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {
         // 封面
-        Image(
-            painter = rememberAsyncImagePainter(
-                model = movie.coverUrl,
-                error = coil.request.ImageRequest.Builder(null)
-                    .crossfade(true).build()
-            ),
-            contentDescription = "cover",
-            modifier = Modifier
-                .width(80.dp)
-                .height(113.dp)
-                .clip(RoundedCornerShape(4.dp)),
-            contentScale = androidx.compose.ui.layout.ContentScale.Crop
-        )
+        if (movie.coverUrl.isNotBlank()) {
+            Image(
+                painter = rememberAsyncImagePainter(
+                    model = movie.coverUrl,
+                    imageLoader = ImageLoaderHolder.loader
+                ),
+                contentDescription = "cover",
+                modifier = Modifier
+                    .width(80.dp)
+                    .height(113.dp)
+                    .clip(RoundedCornerShape(4.dp)),
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop
+            )
+        } else {
+            Box(
+                modifier = Modifier
+                    .width(80.dp)
+                    .height(113.dp)
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xFFE0E0E0)),
+                contentAlignment = Alignment.Center
+            ) {
+                Text("封面", color = Color.Gray, fontSize = 11.sp)
+            }
+        }
 
         // 信息区
         Column(modifier = Modifier.weight(1f)) {
@@ -128,7 +144,7 @@ fun MovieCard(
                         onClick = {
                             val intent = android.content.Intent(android.content.Intent.ACTION_VIEW, android.net.Uri.parse(movie.doubanUrl))
                             intent.addFlags(android.content.Intent.FLAG_ACTIVITY_NEW_TASK)
-                            androidx.compose.ui.platform.LocalContext.current.startActivity(intent)
+                            context.startActivity(intent)
                         },
                         contentPadding = PaddingValues(horizontal = 8.dp, vertical = 2.dp),
                         modifier = Modifier.height(32.dp)

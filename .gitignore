@@ -26,3 +26,6 @@ out/
 # Python leftovers (from desktop version)
 __pycache__/
 *.pyc
+
+# Gradle local cache
+.gradle/

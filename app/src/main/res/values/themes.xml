@@ -1,4 +1,5 @@
 <?xml version="1.0" encoding="utf-8"?>
 <resources>
-    <style name="Theme.MovieMagnetSearch" parent="Theme.Material3.DayNight.NoActionBar" />
+    <!-- 无 ActionBar 的基础主题（Compose 自己画 UI，不依赖 MaterialComponents XML 资源） -->
+    <style name="Theme.MovieMagnetSearch" parent="android:Theme.Material.Light.NoActionBar" />
 </resources>

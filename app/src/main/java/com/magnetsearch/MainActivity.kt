@@ -10,6 +10,9 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import coil.ImageLoader
+import coil.request.CachePolicy
+import com.magnetsearch.data.api.HttpClient
 import com.magnetsearch.ui.douban.DoubanScreen
 import com.magnetsearch.ui.magnet.MagnetScreen
 import com.magnetsearch.ui.theme.MovieMagnetSearchTheme
@@ -17,12 +20,27 @@ import com.magnetsearch.ui.theme.MovieMagnetSearchTheme
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
+
+        // 全局配置 Coil：用 IPv4-only OkHttp，加速封面加载
+        val imageLoader = ImageLoader.Builder(this)
+            .okHttpClient { HttpClient.forImage() }
+            .respectCacheHeaders(false)
+            .diskCachePolicy(CachePolicy.ENABLED)
+            .memoryCachePolicy(CachePolicy.ENABLED)
+            .build()
+        ImageLoaderHolder.loader = imageLoader
+
         setContent {
             MovieMagnetSearchTheme {
                 RootScaffold()
             }
         }
     }
+}
+
+/** 让 Coil 在 Composable 中用自定义 ImageLoader。 */
+object ImageLoaderHolder {
+    lateinit var loader: ImageLoader
 }
 
 private enum class Tab { MAGNET, DOUBAN }

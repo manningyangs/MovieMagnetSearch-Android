@@ -1,6 +1,6 @@
 package com.magnetsearch.ui.magnet
 
-import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.magnetsearch.data.model.MediaType
 import com.magnetsearch.data.model.MagnetResult
@@ -16,7 +16,7 @@ data class MagnetUiState(
     val error: String? = null
 )
 
-class MagnetViewModel : AndroidViewModel(android.app.Application()) {
+class MagnetViewModel : ViewModel() {
     private val repo = MagnetRepository()
 
     private val _uiState = MutableStateFlow(MagnetUiState())
@@ -25,7 +25,7 @@ class MagnetViewModel : AndroidViewModel(android.app.Application()) {
     fun search(
         query: String,
         mediaType: MediaType = MediaType.MOVIE,
-        sources: List<SearchSource> = listOf(SearchSource.PIRATE_BAY, SearchSource.NYAA)
+        sources: List<SearchSource> = SearchSource.all()
     ) {
         _uiState.value = MagnetUiState(isLoading = true)
         viewModelScope.launch {

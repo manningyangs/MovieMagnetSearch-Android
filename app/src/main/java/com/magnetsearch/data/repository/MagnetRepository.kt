@@ -75,37 +75,52 @@ class MagnetRepository {
     }
 
     // ---------- YTS (只给电影) ----------
+    private val YTS_DOMAINS = listOf("yts.ag", "yts.lt", "yts.mx")
+
     private suspend fun searchYts(query: String): List<MagnetResult> {
-        val url = "https://yts.mx/api/v2/list_movies.json?query_term=${URLEncoder.encode(query, "UTF-8")}&limit=10"
-        val req = Request.Builder().url(url).header("User-Agent", "Mozilla/5.0").get().build()
-        return client.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) return@use emptyList()
-            val body = resp.body?.string() ?: return@use emptyList()
-            val json = org.json.JSONObject(body).optJSONObject("data") ?: return@use emptyList()
-            val movies = json.optJSONArray("movies") ?: return@use emptyList()
-            val out = mutableListOf<MagnetResult>()
-            for (i in 0 until movies.length()) {
-                val movie = movies.getJSONObject(i)
-                val title = movie.optString("title")
-                val torrents = movie.optJSONArray("torrents") ?: continue
-                for (j in 0 until torrents.length()) {
-                    val t = torrents.getJSONObject(j)
-                    val hash = t.optString("hash")
-                    val magnet = "magnet:?xt=urn:btih:$hash&dn=${URLEncoder.encode(title, "UTF-8")}"
-                    out.add(
-                        MagnetResult(
-                            title = "$title [${t.optString("quality")}]",
-                            magnet = magnet,
-                            size = t.optString("size"),
-                            seeders = t.optInt("seeds"),
-                            leechers = t.optInt("peers"),
-                            source = "YTS", category = "movie"
-                        )
-                    )
+        // 多域 fallback（和桌面版一致）
+        for (domain in YTS_DOMAINS) {
+            val url = "https://$domain/api/v2/list_movies.json?query_term=${URLEncoder.encode(query, "UTF-8")}&limit=10"
+            val req = Request.Builder().url(url).header("User-Agent", "Mozilla/5.0").get().build()
+            val result = runCatching {
+                client.newCall(req).execute().use { resp ->
+                    if (!resp.isSuccessful) return@use emptyList()
+                    val body = resp.body?.string() ?: return@use emptyList()
+                    parseYtsJson(body)
                 }
             }
-            out
+            if (result.isSuccess && result.get().isNotEmpty()) {
+                return result.get()
+            }
         }
+        return emptyList()
+    }
+
+    private fun parseYtsJson(body: String): List<MagnetResult> {
+        val json = org.json.JSONObject(body).optJSONObject("data") ?: return emptyList()
+        val movies = json.optJSONArray("movies") ?: return emptyList()
+        val out = mutableListOf<MagnetResult>()
+        for (i in 0 until movies.length()) {
+            val movie = movies.getJSONObject(i)
+            val title = movie.optString("title")
+            val torrents = movie.optJSONArray("torrents") ?: continue
+            for (j in 0 until torrents.length()) {
+                val t = torrents.getJSONObject(j)
+                val hash = t.optString("hash")
+                val magnet = "magnet:?xt=urn:btih:$hash&dn=${URLEncoder.encode(title, "UTF-8")}"
+                out.add(
+                    MagnetResult(
+                        title = "$title [${t.optString("quality")}]",
+                        magnet = magnet,
+                        size = t.optString("size"),
+                        seeders = t.optInt("seeds"),
+                        leechers = t.optInt("peers"),
+                        source = "YTS", category = "movie"
+                    )
+                )
+            }
+        }
+        return out
     }
 
     // ---------- Nyaa.si ----------

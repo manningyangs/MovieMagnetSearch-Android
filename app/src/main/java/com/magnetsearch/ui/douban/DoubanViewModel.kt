@@ -1,6 +1,6 @@
 package com.magnetsearch.ui.douban
 
-import androidx.lifecycle.AndroidViewModel
+import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.magnetsearch.data.model.DoubanMovie
 import com.magnetsearch.data.repository.DoubanRepository
@@ -15,7 +15,7 @@ data class DoubanUiState(
     val isTop250: Boolean = true
 )
 
-class DoubanViewModel : AndroidViewModel(android.app.Application()) {
+class DoubanViewModel : ViewModel() {
     private val repo = DoubanRepository()
 
     private val _uiState = MutableStateFlow(DoubanUiState())

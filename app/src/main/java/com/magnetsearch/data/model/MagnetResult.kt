@@ -1,5 +1,7 @@
 package com.magnetsearch.data.model
 
+import kotlinx.serialization.Serializable
+
 @Serializable
 data class MagnetResult(
     val title: String,
@@ -17,7 +19,11 @@ enum class SearchSource(val displayName: String) {
     YTS("YTS"),
     NYAA("Nyaa.si"),
     ONE337X("1337x"),
-    ALL("全部")
+    ALL("全部");
+
+    companion object {
+        fun all(): List<SearchSource> = values().filter { it != ALL }
+    }
 }
 
 @Serializable
