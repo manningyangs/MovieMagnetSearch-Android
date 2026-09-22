@@ -299,6 +299,6 @@ class DoubanRepository {
                 d.comments = comments
 
                 android.util.Log.d("DoubanRepo", "parseDetail OK: title=${d.title}, rating=${d.rating}, comments=${d.comments.size}")
-                d
+                return d
     }
 }
