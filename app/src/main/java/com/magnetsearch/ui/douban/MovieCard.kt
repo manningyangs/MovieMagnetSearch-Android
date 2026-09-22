@@ -1,6 +1,5 @@
 package com.magnetsearch.ui.douban
 
-import androidx.compose.foundation.Image
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -13,12 +12,12 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
-import coil.compose.rememberAsyncImagePainter
-import com.magnetsearch.ImageLoaderHolder
+import coil.compose.AsyncImage
 import com.magnetsearch.data.model.DoubanMovie
 import com.magnetsearch.ui.theme.*
 
@@ -38,17 +37,17 @@ fun MovieCard(
     ) {
         // 封面
         if (movie.coverUrl.isNotBlank()) {
-            Image(
-                painter = rememberAsyncImagePainter(
-                    model = movie.coverUrl,
-                    imageLoader = ImageLoaderHolder.loader
-                ),
+            AsyncImage(
+                model = movie.coverUrl,
                 contentDescription = "cover",
                 modifier = Modifier
                     .width(80.dp)
                     .height(113.dp)
-                    .clip(RoundedCornerShape(4.dp)),
-                contentScale = androidx.compose.ui.layout.ContentScale.Crop
+                    .clip(RoundedCornerShape(4.dp))
+                    .background(Color(0xFFE0E0E0)),
+                contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                placeholder = painterResource(id = android.R.drawable.ic_menu_report_image),
+                error = painterResource(id = android.R.drawable.ic_menu_report_image)
             )
         } else {
             Box(
