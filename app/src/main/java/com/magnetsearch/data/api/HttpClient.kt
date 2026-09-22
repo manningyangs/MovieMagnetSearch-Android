@@ -39,24 +39,29 @@ object HttpClient {
         .followRedirects(true)
         .cookieJar(sharedCookieJar)
 
-    private val UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36"
+    private val UA_DESKTOP = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+    private val UA_MOBILE = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
 
-    private fun withCommonHeaders(builder: OkHttpClient.Builder): OkHttpClient.Builder = builder
+    private fun withCommonHeaders(builder: OkHttpClient.Builder, ua: String = UA_DESKTOP): OkHttpClient.Builder = builder
         .addInterceptor { chain ->
             val req = chain.request().newBuilder()
-                .header("User-Agent", UA)
+                .header("User-Agent", ua)
                 .build()
             chain.proceed(req)
         }
 
+    /** douban 主 client —— 用桌面版 Chrome UA！
+     *  Android UA (Mobile) 会被豆瓣重定向到 m.douban.com（移动端），
+     *  cookie 存在 m.douban.com 域 → 对 movie.douban.com 的 PoW POST cookie 不匹配 → 无限循环 PoW。
+     *  跟桌面版 Python 的 _UA 完全一致。 */
     val douban: OkHttpClient by lazy {
-        withCommonHeaders(baseBuilder())
+        withCommonHeaders(baseBuilder(), UA_DESKTOP)
             .addInterceptor(logging)
             .build()
     }
 
     val bt: OkHttpClient by lazy {
-        withCommonHeaders(baseBuilder())
+        withCommonHeaders(baseBuilder(), UA_MOBILE)
             .addInterceptor(logging)
             .build()
     }
