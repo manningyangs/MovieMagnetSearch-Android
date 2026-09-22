@@ -82,16 +82,14 @@ class MagnetRepository {
         for (domain in YTS_DOMAINS) {
             val url = "https://$domain/api/v2/list_movies.json?query_term=${URLEncoder.encode(query, "UTF-8")}&limit=10"
             val req = Request.Builder().url(url).header("User-Agent", "Mozilla/5.0").get().build()
-            val result = runCatching {
+            val torrents: List<MagnetResult> = runCatching {
                 client.newCall(req).execute().use { resp ->
                     if (!resp.isSuccessful) return@use emptyList()
                     val body = resp.body?.string() ?: return@use emptyList()
                     parseYtsJson(body)
                 }
-            }
-            if (result.isSuccess && result.get().isNotEmpty()) {
-                return result.get()
-            }
+            }.getOrNull() ?: emptyList()
+            if (torrents.isNotEmpty()) return torrents
         }
         return emptyList()
     }
