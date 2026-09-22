@@ -160,7 +160,7 @@ class DoubanRepository {
             // 豆瓣详情页可能触发 SHA-512 PoW 反爬，sec.douban.com 返回的是带 name="cha" 的表单
             val realHtml = if (html.contains("载入中") && html.contains("name=\"cha\"")) {
                 android.util.Log.d("DoubanRepo", "PoW challenge detected for $doubanId, solving...")
-                solveDoubanPow(html)?.also {
+                solveDoubanPow(html, url)?.also {
                     android.util.Log.d("DoubanRepo", "PoW solved! Got real detail HTML (${it.length} bytes)")
                 } ?: run {
                     android.util.Log.e("DoubanRepo", "PoW FAILED for $doubanId")
@@ -186,44 +186,70 @@ class DoubanRepository {
         }
     }
 
-    /** 解豆瓣 SHA-512 PoW 挑战 —— 和桌面版 Python 实现完全一致。
-     *  从 PoW 表单提取 tok/cha/red，找最小 nonce 使 SHA512(cha + nonce).hex 前 4 字符为 "0000"，
-     *  然后 POST 回 sec.douban.com/c 拿到真正的详情页 HTML。 */
-    private fun solveDoubanPow(powHtml: String): String? {
+    private fun solveDoubanPow(powHtml: String, subjectUrl: String): String? {
         val tok = Regex("""name="tok"[^>]*value="([^"]+)"""").find(powHtml)?.groupValues?.get(1) ?: return null
         val cha = Regex("""name="cha"[^>]*value="([^"]+)"""").find(powHtml)?.groupValues?.get(1) ?: return null
         val red = Regex("""name="red"[^>]*value="([^"]+)"""").find(powHtml)?.groupValues?.get(1) ?: return null
 
         // SHA-512 PoW：找最小 nonce 使 hash(cha + nonce) 前 4 个 hex 字符为 "0000"
         val digest = java.security.MessageDigest.getInstance("SHA-512")
-        val hexSb = StringBuilder(128)
         var nonce = 0L
         while (true) {
             nonce++
-            hexSb.clear()
             val bytes = digest.digest((cha + nonce).toByteArray())
-            for (b in bytes) {
-                val s = (b.toInt() and 0xFF).toString(16)
-                if (s.length == 1) hexSb.append('0')
-                hexSb.append(s)
-            }
-            if (hexSb.length >= 4 && hexSb.substring(0, 4) == "0000") break
+            val hex = bytes.joinToString("") { b -> (b.toInt() and 0xFF).toString(16).padStart(2, '0') }
+            if (hex.startsWith("0000")) break
         }
         android.util.Log.d("DoubanRepo", "PoW nonce=$nonce (cha length=${cha.length})")
 
-        // POST 到 sec.douban.com/c（CookieJar 自动带上之前的 session cookie）
+        // === 尝试 A：POST 到 sec.douban.com/c 跟进重定向 ===
         val form = okhttp3.FormBody.Builder()
             .add("tok", tok).add("cha", cha)
             .add("sol", nonce.toString()).add("red", red).build()
-        val req = Request.Builder().url("https://sec.douban.com/c").post(form).build()
+        val req = Request.Builder().url("https://sec.douban.com/c")
+            .header("Referer", subjectUrl)
+            .header("Accept-Language", "zh-CN,zh;q=0.9")
+            .post(form).build()
         HttpClient.douban.newCall(req).execute().use { resp ->
-            if (!resp.isSuccessful) {
-                android.util.Log.e("DoubanRepo", "PoW POST HTTP ${resp.code}")
-                return null
+            val finalUrl = resp.request.url.toString()
+            val html = resp.body?.string() ?: ""
+            android.util.Log.d("DoubanRepo", "PoW POST A finalUrl=$finalUrl, bodyLen=${html.length}, hasItemReviewed=${html.contains("v:itemreviewed")}")
+            if (html.contains("v:itemreviewed")) return html
+            // 如果还在 sec.douban.com，继续尝试 B
+            if (finalUrl.startsWith("https://sec.douban.com")) {
+                android.util.Log.d("DoubanRepo", "PoW POST A still on sec.douban.com (body head: ${html.take(200).replace("\n", "\\n")})")
             }
-            val html = resp.body?.string() ?: return null
-            return if (html.contains("v:itemreviewed")) html else null
         }
+
+        // === 尝试 B：关闭 followRedirects，手动跟随 302 ===
+        android.util.Log.d("DoubanRepo", "PoW trying B: manual 302 follow")
+        val clientNoRedirect = HttpClient.douban.newBuilder().followRedirects(false).followSslRedirects(false).build()
+        val resp1 = clientNoRedirect.newCall(req).execute()
+        val location = resp1.header("Location")
+        android.util.Log.d("DoubanRepo", "PoW POST B status=${resp1.code}, Location=$location")
+        resp1.close()
+        if (!location.isNullOrBlank()) {
+            val redirectUrl = if (location.startsWith("/")) "https://movie.douban.com$location" else location
+            val resp2 = clientNoRedirect.newCall(Request.Builder().url(redirectUrl).get().build()).execute()
+            val body2 = resp2.body?.string() ?: ""
+            android.util.Log.d("DoubanRepo", "PoW POST B redirect status=${resp2.code}, hasItemReviewed=${body2.contains("v:itemreviewed")}")
+            if (body2.contains("v:itemreviewed")) return body2
+        }
+
+        // === 尝试 C：直接 POST 到原 subject URL（桌面版降级方案） ===
+        android.util.Log.d("DoubanRepo", "PoW trying C: POST directly to subject URL")
+        val reqC = Request.Builder().url(subjectUrl)
+            .header("Referer", subjectUrl)
+            .header("Content-Type", "application/x-www-form-urlencoded")
+            .post(form).build()
+        HttpClient.douban.newCall(reqC).execute().use { resp ->
+            val html = resp.body?.string() ?: ""
+            android.util.Log.d("DoubanRepo", "PoW POST C bodyLen=${html.length}, hasItemReviewed=${html.contains("v:itemreviewed")}")
+            if (html.contains("v:itemreviewed")) return html
+        }
+
+        android.util.Log.e("DoubanRepo", "All PoW strategies FAILED for $subjectUrl")
+        return null
     }
 
     private fun parseDetailHtml(html: String, doubanId: String, url: String): DoubanDetail? {
