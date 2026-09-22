@@ -22,14 +22,18 @@ object HttpClient {
     }
 
     /** 共享 CookieJar —— 让 Top250 预热、详情页 GET、PoW POST 共用同一套 session cookie。
-     *  豆瓣 PoW 挑战需要 cookie 上下文才能通过。 */
+     *  豆瓣 PoW 挑战需要 cookie 上下文才能通过。
+     *  ⚠️ 关键：Cookie 不按 url.host 存储 —— 因为跨域 cookie（Domain=.douban.com）
+     *  设置在 sec.douban.com 上，但需要在 movie.douban.com 请求时发送。
+     *  必须让 OkHttp 的 Cookie.matches() 自己做 domain 匹配。 */
     private val sharedCookieJar = object : CookieJar {
-        private val cookies = mutableMapOf<String, MutableList<Cookie>>()
+        private val cookies = mutableListOf<Cookie>()
         override fun saveFromResponse(url: HttpUrl, cs: List<Cookie>) {
-            cookies.getOrPut(url.host) { mutableListOf() }.addAll(cs)
+            cookies.addAll(cs)
         }
         override fun loadForRequest(url: HttpUrl): List<Cookie> {
-            return cookies[url.host]?.filter { it.matches(url) } ?: emptyList()
+            // Cookie.matches() 正确处理 Domain= 前缀点号 cookie（跨子域）
+            return cookies.filter { it.matches(url) }
         }
     }
 
