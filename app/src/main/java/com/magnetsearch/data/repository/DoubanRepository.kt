@@ -244,7 +244,7 @@ class DoubanRepository {
         android.util.Log.d("DoubanRepo", "PoW POST B status=${resp1.code}, Location=$location")
         // 关键 debug：打印 PoW POST 后 sec.douban.com 返回了哪些 Set-Cookie
         resp1.headers("Set-Cookie").forEach { android.util.Log.d("DoubanRepo", "PoW Set-Cookie: $it") }
-        android.util.Log.d("DoubanRepo", "PoW cookies in jar: ${HttpClient.douban.cookieJar.loadForRequest(okhttp3.HttpUrl.get("https://sec.douban.com/"))}")
+        android.util.Log.d("DoubanRepo", "PoW cookies in jar: ${HttpClient.douban.cookieJar.loadForRequest(okhttp3.HttpUrl.parse("https://sec.douban.com/")!!)}")
         resp1.close()
         if (!location.isNullOrBlank()) {
             val redirectUrl = if (location.startsWith("/")) "https://movie.douban.com$location" else location
@@ -253,7 +253,7 @@ class DoubanRepository {
             android.util.Log.d("DoubanRepo", "PoW POST B redirect status=${resp2.code}, hasItemReviewed=${body2.contains("v:itemreviewed")}")
             resp2.headers("Set-Cookie").forEach { android.util.Log.d("DoubanRepo", "PoW B redirect Set-Cookie: $it") }
             // 手动打印 movie.douban.com 请求时 jar 里实际送了哪些 cookie
-            android.util.Log.d("DoubanRepo", "PoW B cookies for movie.douban.com: ${HttpClient.douban.cookieJar.loadForRequest(okhttp3.HttpUrl.get("https://movie.douban.com/"))}")
+            android.util.Log.d("DoubanRepo", "PoW B cookies for movie.douban.com: ${HttpClient.douban.cookieJar.loadForRequest(okhttp3.HttpUrl.parse("https://movie.douban.com/")!!)}")
             if (body2.contains("v:itemreviewed")) return body2
         }
 
