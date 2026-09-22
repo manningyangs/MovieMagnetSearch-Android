@@ -153,6 +153,10 @@ class DoubanRepository {
         val url = "https://movie.douban.com/subject/$doubanId/"
 
         runCatching {
+            // === 预热 Cookie（和桌面版 core/douban.py:298 完全一致）===
+            // 先 GET movie.douban.com/ 让豆瓣下发 bid cookie —— 没有这个 PoW 解了也白解
+            warmUpCookie()
+
             val html = fetchHtml(url)
                 ?: return@runCatching null
 
@@ -183,6 +187,16 @@ class DoubanRepository {
                 return null
             }
             return resp.body?.string()
+        }
+    }
+
+    /** 预热 cookie：GET movie.douban.com/ 让豆瓣下发 bid cookie。
+     *  没有这个 cookie，PoW 解出来 POST 回去 sec.douban.com 不认 —— 会循环回 PoW 页。
+     *  和桌面版 core/douban.py:298 完全一致。 */
+    private fun warmUpCookie() {
+        runCatching {
+            val req = Request.Builder().url("https://movie.douban.com/").get().build()
+            HttpClient.douban.newCall(req).execute().use { it.close() }
         }
     }
 
