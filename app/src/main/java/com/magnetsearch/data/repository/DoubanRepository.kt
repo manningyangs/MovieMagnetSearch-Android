@@ -29,6 +29,10 @@ class DoubanRepository {
         // 并发抓所有页，然后按 pageIdx 排序合并
         val results = deferreds.awaitAll().sortedBy { it.first }
         val all = results.flatMap { it.second }
+        // DEBUG: 打印前3个封面URL，确认解析正确
+        all.take(3).forEachIndexed { i, m ->
+            android.util.Log.d("DoubanRepo", "  #${m.rank} coverUrl[${m.coverUrl.isNotBlank()}] = ${m.coverUrl}")
+        }
         all.take(limit)
     }
 
