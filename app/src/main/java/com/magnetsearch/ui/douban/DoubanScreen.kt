@@ -25,6 +25,7 @@ import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.magnetsearch.data.model.DoubanComment
 import com.magnetsearch.data.model.DoubanDetail
@@ -236,24 +237,26 @@ private fun DoubanDetailScreen(
             }
 
             // === 完整信息表 ===
-            item { Spacer(Modifier.height(8.dp)) }
-            InfoRow("类型", d?.genres?.joinToString(" / "))
-            InfoRow("地区", d?.countries?.joinToString(" / "))
-            InfoRow("语言", d?.languages?.joinToString(" / "))
-            InfoRow("片长", d?.duration?.let { "$it 分钟" })
-            InfoRow("上映日期", d?.releaseDates?.joinToString("\n"))
-            InfoRow("又名", d?.aliases?.joinToString(" / "))
+            item {
+                Spacer(Modifier.height(8.dp))
+                InfoRow("类型", d?.genres?.joinToString(" / "))
+                InfoRow("地区", d?.countries?.joinToString(" / "))
+                InfoRow("语言", d?.languages?.joinToString(" / "))
+                InfoRow("片长", d?.duration?.let { "$it 分钟" })
+                InfoRow("上映日期", d?.releaseDates?.joinToString("\n"))
+                InfoRow("又名", d?.aliases?.joinToString(" / "))
 
-            val directors = d?.directors?.takeIf { it.isNotEmpty() }
-            if (directors != null) InfoRow("导演", directors.joinToString(" / "))
+                val directors = d?.directors?.takeIf { it.isNotEmpty() }
+                if (directors != null) InfoRow("导演", directors.joinToString(" / "))
 
-            val writers = d?.writers?.takeIf { it.isNotEmpty() }
-            if (writers != null) InfoRow("编剧", writers.joinToString(" / "))
+                val writers = d?.writers?.takeIf { it.isNotEmpty() }
+                if (writers != null) InfoRow("编剧", writers.joinToString(" / "))
 
-            val actors = d?.actors?.takeIf { it.isNotEmpty() }
-            if (actors != null) InfoRow("主演", actors.joinToString(" / "))
+                val actors = d?.actors?.takeIf { it.isNotEmpty() }
+                if (actors != null) InfoRow("主演", actors.joinToString(" / "))
 
-            item { Spacer(Modifier.height(8.dp)) }
+                Spacer(Modifier.height(8.dp))
+            }
 
             // === 按钮 ===
             item {
