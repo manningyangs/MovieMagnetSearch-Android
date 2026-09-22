@@ -23,20 +23,39 @@ object HttpClient {
         .readTimeout(20, TimeUnit.SECONDS)
         .followRedirects(true)
 
+    private val UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36"
+
+    private fun withCommonHeaders(builder: OkHttpClient.Builder): OkHttpClient.Builder = builder
+        .addInterceptor { chain ->
+            val req = chain.request().newBuilder()
+                .header("User-Agent", UA)
+                .build()
+            chain.proceed(req)
+        }
+
     val douban: OkHttpClient by lazy {
-        baseBuilder()
+        withCommonHeaders(baseBuilder())
             .addInterceptor(logging)
             .build()
     }
 
     val bt: OkHttpClient by lazy {
-        baseBuilder()
+        withCommonHeaders(baseBuilder())
             .addInterceptor(logging)
             .build()
     }
 
-    /** Coil 图片加载专用 — 详细 logcat 输出诊断封面加载问题。 */
+    /** Coil 图片加载专用 — 加 UA + Referer（豆瓣 img CDN 反爬虫，418 拒无 UA 请求）。 */
     fun forImage(): OkHttpClient = baseBuilder()
+        .addInterceptor { chain ->
+            val req = chain.request().newBuilder()
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36")
+                .header("Referer", "https://movie.douban.com/")
+                .header("Accept", "image/webp,image/apng,image/*,*/*;q=0.8")
+                .header("Accept-Language", "zh-CN,zh;q=0.9")
+                .build()
+            chain.proceed(req)
+        }
         .addInterceptor(imageLogging)
         .build()
 }
