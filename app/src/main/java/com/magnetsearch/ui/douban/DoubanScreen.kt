@@ -15,6 +15,8 @@ import androidx.compose.foundation.lazy.rememberLazyListState
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
+import androidx.compose.material.icons.filled.ChevronLeft
+import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Home
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
@@ -36,7 +38,6 @@ import com.magnetsearch.data.model.DoubanComment
 import com.magnetsearch.data.model.DoubanDetail
 import com.magnetsearch.data.model.DoubanMovie
 import com.magnetsearch.ui.theme.*
-import kotlinx.coroutines.flow.distinctUntilChanged
 
 @OptIn(ExperimentalMaterial3Api::class)
 @Composable
@@ -49,28 +50,16 @@ fun DoubanScreen(
     var searchText by remember { mutableStateOf("") }
 
     // ===== 列表页 LazyListState =====
-    // 叠层架构：LazyColumn 永远存在，滚动位置自然保留
     val listState = rememberLazyListState()
 
-    // ===== 自动加载更多（滚动到底部）=====
-    LaunchedEffect(listState) {
-        snapshotFlow { listState.layoutInfo.visibleItemsInfo }
-            .distinctUntilChanged()
-            .collect { visible ->
-                val last = visible.lastOrNull()
-                val total = listState.layoutInfo.totalItemsCount
-                // footer index = total - 1（如果 movies.take(displayCount) 后面还有 item）
-                if (last != null && last.index >= total - 2) {
-                    vm.loadMore()
-                }
-            }
-    }
+    // ===== 翻页后自动滚回顶部 =====
+    LaunchedEffect(state.currentPage) { listState.animateScrollToItem(0) }
 
     BackHandler(enabled = state.selectedMovie != null) { vm.backToList() }
 
     Box(Modifier.fillMaxSize()) {
         // ============================================================
-        // 底层：列表页（永不销毁）
+        // 底层：列表页（永不销毁，叠层架构保证滚动位置保留）
         // ============================================================
         Scaffold(
             topBar = {
@@ -155,51 +144,30 @@ fun DoubanScreen(
                                 TextTertiary, fontSize = 14.sp
                             )
 
-                        else -> {
-                            val visibleMovies = state.movies.take(state.displayCount)
-                            val hasMore = state.displayCount < state.movies.size
-
+                        else -> Column(Modifier.fillMaxSize()) {
+                            // 列表（固定 20 部一页）
                             LazyColumn(
                                 state = listState,
-                                modifier = Modifier.fillMaxSize(),
+                                modifier = Modifier.weight(1f, fill = true),
                                 contentPadding = PaddingValues(vertical = 4.dp)
                             ) {
-                                items(visibleMovies, key = { it.doubanId + it.rank }) { movie ->
+                                items(state.visibleMovies, key = { it.doubanId + it.rank }) { movie ->
                                     MovieCard(
                                         movie = movie,
                                         onSearch = { onMagnetSearch(it) },
                                         onClick = { vm.selectMovie(movie) }
                                     )
                                 }
-                                // footer：状态提示
-                                item {
-                                    Column(
-                                        modifier = Modifier.fillMaxWidth().padding(vertical = 16.dp),
-                                        horizontalAlignment = Alignment.CenterHorizontally
-                                    ) {
-                                        if (hasMore) {
-                                            CircularProgressIndicator(
-                                                modifier = Modifier.size(24.dp),
-                                                strokeWidth = 2.dp,
-                                                color = Primary
-                                            )
-                                            Spacer(Modifier.height(6.dp))
-                                            Text(
-                                                text = "加载更多...",
-                                                fontSize = 12.sp,
-                                                color = TextTertiary
-                                            )
-                                        } else {
-                                            Text(
-                                                text = if (state.isTop250) "共 ${state.movies.size} 部 · 到底啦"
-                                                       else "共 ${state.movies.size} 条结果",
-                                                fontSize = 12.sp,
-                                                color = TextTertiary
-                                            )
-                                        }
-                                    }
-                                }
                             }
+                            // 分页器（固定在底部）
+                            PaginationBar(
+                                currentPage = state.currentPage,
+                                totalPages = state.totalPages,
+                                totalItems = state.movies.size,
+                                onPrev = { vm.prevPage() },
+                                onNext = { vm.nextPage() },
+                                onGoTo = { vm.goToPage(it) }
+                            )
                         }
                     }
                 }
@@ -238,6 +206,104 @@ fun DoubanScreen(
     // 首次自动加载 Top250
     LaunchedEffect(Unit) {
         if (state.movies.isEmpty() && !state.isLoading) vm.loadTop250()
+    }
+}
+
+// ============================================================
+// 分页器组件
+// ============================================================
+
+@OptIn(ExperimentalMaterial3Api::class)
+@Composable
+private fun PaginationBar(
+    currentPage: Int,
+    totalPages: Int,
+    totalItems: Int,
+    onPrev: () -> Unit,
+    onNext: () -> Unit,
+    onGoTo: (Int) -> Unit
+) {
+    if (totalPages <= 0) return
+
+    Surface(
+        color = MaterialTheme.colorScheme.surface,
+        shadowElevation = 4.dp
+    ) {
+        Column(
+            modifier = Modifier
+                .fillMaxWidth()
+                .padding(horizontal = 12.dp, vertical = 8.dp)
+        ) {
+            Row(
+                modifier = Modifier.fillMaxWidth(),
+                verticalAlignment = Alignment.CenterVertically,
+                horizontalArrangement = Arrangement.Center
+            ) {
+                // 上一页
+                IconButton(
+                    onClick = onPrev,
+                    enabled = currentPage > 1,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(Icons.Default.ChevronLeft, "上一页", tint = if (currentPage > 1) Primary else TextTertiary)
+                }
+
+                Spacer(Modifier.width(4.dp))
+
+                // 页码按钮
+                PageNumbers(currentPage = currentPage, totalPages = totalPages, onGoTo = onGoTo)
+
+                Spacer(Modifier.width(4.dp))
+
+                // 下一页
+                IconButton(
+                    onClick = onNext,
+                    enabled = currentPage < totalPages,
+                    modifier = Modifier.size(36.dp)
+                ) {
+                    Icon(Icons.Default.ChevronRight, "下一页", tint = if (currentPage < totalPages) Primary else TextTertiary)
+                }
+            }
+
+            // 底部统计：共 250 部 · 第 1/13 页
+            Text(
+                text = "共 $totalItems 部 · 第 $currentPage/$totalPages 页",
+                fontSize = 11.sp,
+                color = TextTertiary,
+                modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+@Composable
+private fun PageNumbers(currentPage: Int, totalPages: Int, onGoTo: (Int) -> Unit) {
+    // 最多显示 7 个页码（当前页前后各 3 个 + 当前页）
+    val pageWindow = 7
+    val start = ((currentPage - pageWindow / 2).coerceAtLeast(1)).coerceAtMost((totalPages - pageWindow + 1).coerceAtLeast(1))
+    val end = (start + pageWindow - 1).coerceAtMost(totalPages)
+
+    Row(horizontalArrangement = Arrangement.spacedBy(4.dp)) {
+        for (p in start..end) {
+            val isCurrent = p == currentPage
+            FilterChip(
+                selected = isCurrent,
+                onClick = { onGoTo(p) },
+                label = {
+                    Text(
+                        text = p.toString(),
+                        fontSize = 12.sp,
+                        fontWeight = if (isCurrent) FontWeight.Bold else FontWeight.Normal
+                    )
+                },
+                shape = RoundedCornerShape(8.dp),
+                colors = FilterChipDefaults.filterChipColors(
+                    selectedContainerColor = Primary,
+                    selectedLabelColor = androidx.compose.ui.graphics.Color.White
+                )
+            )
+        }
     }
 }
 
