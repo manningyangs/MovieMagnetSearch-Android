@@ -65,7 +65,8 @@ object HttpClient {
     }
 
     val bt: OkHttpClient by lazy {
-        withCommonHeaders(baseBuilder(), UA_MOBILE)
+        // 用桌面 Chrome UA —— 很多 BT 站对 Android Mobile UA 返回更少结果甚至拦截
+        withCommonHeaders(baseBuilder(), UA_DESKTOP)
             .addInterceptor(logging)
             .build()
     }

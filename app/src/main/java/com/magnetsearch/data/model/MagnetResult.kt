@@ -52,6 +52,7 @@ enum class SearchSource(val displayName: String) {
     YTS("YTS"),
     NYAA("Nyaa.si"),
     ONE337X("1337x"),
+    BTBTT("BT之家"),
     ALL("全部");
 
     companion object {
