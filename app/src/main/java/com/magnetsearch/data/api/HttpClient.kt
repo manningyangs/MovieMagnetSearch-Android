@@ -13,10 +13,12 @@ import java.util.concurrent.TimeUnit
 object HttpClient {
 
     /** 只返回 IPv4 地址的自定义 DNS。 */
-    private val IPv4_ONLY_DNS = Dns { hostname ->
-        InetAddress.getAllByName(hostname)
-            .filterIsInstance<Inet4Address>()
-            .ifEmpty { InetAddress.getAllByName(hostname).toList() }
+    private val IPv4_ONLY_DNS = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            val all = InetAddress.getAllByName(hostname).toList()
+            val v4 = all.filterIsInstance<Inet4Address>()
+            return if (v4.isNotEmpty()) v4 else all
+        }
     }
 
     private fun baseBuilder(): OkHttpClient.Builder = OkHttpClient.Builder()
