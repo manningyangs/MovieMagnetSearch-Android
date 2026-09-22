@@ -1,0 +1,28 @@
+# Gradle
+*.iml
+.gradle/local.properties
+/.idea/
+.DS_Store
+/build/
+/captures/
+.externalNativeBuild/
+.cxx/
+local.properties
+
+# Android
+*.apk
+*.aab
+*.ap_
+*.dex
+*.class
+bin/
+gen/
+out/
+
+# Kotlin
+*.hprof
+*.keystore
+
+# Python leftovers (from desktop version)
+__pycache__/
+*.pyc
