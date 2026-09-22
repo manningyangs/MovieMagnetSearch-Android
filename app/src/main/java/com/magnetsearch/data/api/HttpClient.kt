@@ -2,14 +2,20 @@ package com.magnetsearch.data.api
 
 import okhttp3.Cookie
 import okhttp3.CookieJar
+import okhttp3.Dns
 import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
+import java.net.Inet4Address
+import java.net.InetAddress
 import java.util.concurrent.TimeUnit
 
 /** 全局 OkHttp client。
- * Android 上如果有系统代理（Wi-Fi 设置里或 VPN），OkHttp 默认会通过 ProxySelector 读取。
- * 不强制 IPv4 —— 让系统/DNS 自己决定，避免和 VPN/TUN 模式冲突。
+ *
+ *  bt client 关键：
+ *  - IPv4 强制 Dns：BT 站 IPv6 基本都被 GFW 挡（即使开梯子也只代理 IPv4），
+ *    必须只解析 IPv4 地址，否则会在 IPv6 上卡 15s timeout 才 fallback。
+ *  - 桌面 Chrome UA：BT 站对 Mobile UA 返回更少结果甚至拦截。
  */
 object HttpClient {
 
@@ -21,8 +27,19 @@ object HttpClient {
         level = HttpLoggingInterceptor.Level.BODY
     }
 
+    /** IPv4 强制 Dns —— OkHttp 默认会同时解析 v4 和 v6，
+     *  但 BT 站（nyaa.si / 1337x / yts.mx）返回的 IPv6 地址都连不上，
+     *  OkHttp 会在 v6 上等满 15s timeout 才重试 v4 → 结果页面挂 15s+。
+     *  这里过滤只返回 Inet4Address。 */
+    private val IPv4_ONLY_DNS = object : Dns {
+        override fun lookup(hostname: String): List<InetAddress> {
+            val all = InetAddress.getAllByName(hostname).toList()
+            val v4 = all.filterIsInstance<Inet4Address>()
+            return if (v4.isNotEmpty()) v4 else all
+        }
+    }
+
     /** 共享 CookieJar —— 让 Top250 预热、详情页 GET、PoW POST 共用同一套 session cookie。
-     *  豆瓣 PoW 挑战需要 cookie 上下文才能通过。
      *  ⚠️ 关键：Cookie 不按 url.host 存储 —— 因为跨域 cookie（Domain=.douban.com）
      *  设置在 sec.douban.com 上，但需要在 movie.douban.com 请求时发送。
      *  必须让 OkHttp 的 Cookie.matches() 自己做 domain 匹配。 */
@@ -32,7 +49,6 @@ object HttpClient {
             cookies.addAll(cs)
         }
         override fun loadForRequest(url: HttpUrl): List<Cookie> {
-            // Cookie.matches() 正确处理 Domain= 前缀点号 cookie（跨子域）
             return cookies.filter { it.matches(url) }
         }
     }
@@ -54,25 +70,26 @@ object HttpClient {
             chain.proceed(req)
         }
 
-    /** douban 主 client —— 用桌面版 Chrome UA！
-     *  Android UA (Mobile) 会被豆瓣重定向到 m.douban.com（移动端），
-     *  cookie 存在 m.douban.com 域 → 对 movie.douban.com 的 PoW POST cookie 不匹配 → 无限循环 PoW。
-     *  跟桌面版 Python 的 _UA 完全一致。 */
+    /** douban 主 client —— IPv4 Dns + 桌面 UA（同上 session cookie + PoW）。 */
     val douban: OkHttpClient by lazy {
         withCommonHeaders(baseBuilder(), UA_DESKTOP)
+            .dns(IPv4_ONLY_DNS)
             .addInterceptor(logging)
             .build()
     }
 
+    /** bt 搜索 client —— IPv4 Dns + 桌面 Chrome UA。
+     *  不传代理（让系统 ProxySelector 自动读取 Wi-Fi/VPN 代理）。 */
     val bt: OkHttpClient by lazy {
-        // 用桌面 Chrome UA —— 很多 BT 站对 Android Mobile UA 返回更少结果甚至拦截
         withCommonHeaders(baseBuilder(), UA_DESKTOP)
+            .dns(IPv4_ONLY_DNS)
             .addInterceptor(logging)
             .build()
     }
 
     /** Coil 图片加载专用 — 加 UA + Referer（豆瓣 img CDN 反爬虫，418 拒无 UA 请求）。 */
     fun forImage(): OkHttpClient = baseBuilder()
+        .dns(IPv4_ONLY_DNS)
         .addInterceptor { chain ->
             val req = chain.request().newBuilder()
                 .header("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36")
