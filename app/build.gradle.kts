@@ -42,6 +42,13 @@ android {
         jvmTarget = "17"
     }
 
+    // Gradle toolchain —— 自动下载 JDK 17（系统 Java 8 太老跑不动 AGP 8.2.2）
+    java {
+        toolchain {
+            languageVersion.set(JavaLanguageVersion.of(17))
+        }
+    }
+
     buildFeatures {
         compose = true
     }
