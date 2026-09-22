@@ -1,5 +1,8 @@
 package com.magnetsearch.data.api
 
+import okhttp3.Cookie
+import okhttp3.CookieJar
+import okhttp3.HttpUrl
 import okhttp3.OkHttpClient
 import okhttp3.logging.HttpLoggingInterceptor
 import java.util.concurrent.TimeUnit
@@ -18,10 +21,23 @@ object HttpClient {
         level = HttpLoggingInterceptor.Level.BODY
     }
 
+    /** 共享 CookieJar —— 让 Top250 预热、详情页 GET、PoW POST 共用同一套 session cookie。
+     *  豆瓣 PoW 挑战需要 cookie 上下文才能通过。 */
+    private val sharedCookieJar = object : CookieJar {
+        private val cookies = mutableMapOf<String, MutableList<Cookie>>()
+        override fun saveFromResponse(url: HttpUrl, cs: List<Cookie>) {
+            cookies.getOrPut(url.host) { mutableListOf() }.addAll(cs)
+        }
+        override fun loadForRequest(url: HttpUrl): List<Cookie> {
+            return cookies[url.host]?.filter { it.matches(url) } ?: emptyList()
+        }
+    }
+
     private fun baseBuilder(): OkHttpClient.Builder = OkHttpClient.Builder()
         .connectTimeout(15, TimeUnit.SECONDS)
         .readTimeout(20, TimeUnit.SECONDS)
         .followRedirects(true)
+        .cookieJar(sharedCookieJar)
 
     private val UA = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 Chrome/120.0 Mobile Safari/537.36"
 

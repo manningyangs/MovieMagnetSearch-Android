@@ -151,22 +151,89 @@ class DoubanRepository {
     suspend fun getDetail(doubanId: String): DoubanDetail? = withContext(Dispatchers.IO) {
         if (doubanId.isBlank()) return@withContext null
         val url = "https://movie.douban.com/subject/$doubanId/"
-        val req = Request.Builder()
-            .url(url)
-            .header("User-Agent", UA)
-            .header("Referer", "https://movie.douban.com/")
-            .get()
-            .build()
 
         runCatching {
-            HttpClient.douban.newCall(req).execute().use { resp ->
-                if (!resp.isSuccessful) {
-                    android.util.Log.e("DoubanRepo", "getDetail HTTP ${resp.code} for $doubanId")
-                    return@use null
+            val html = fetchHtml(url)
+                ?: return@runCatching null
+
+            // === PoW 挑战页检测 ===
+            // 豆瓣详情页可能触发 SHA-512 PoW 反爬，sec.douban.com 返回的是带 name="cha" 的表单
+            val realHtml = if (html.contains("载入中") && html.contains("name=\"cha\"")) {
+                android.util.Log.d("DoubanRepo", "PoW challenge detected for $doubanId, solving...")
+                solveDoubanPow(html)?.also {
+                    android.util.Log.d("DoubanRepo", "PoW solved! Got real detail HTML (${it.length} bytes)")
+                } ?: run {
+                    android.util.Log.e("DoubanRepo", "PoW FAILED for $doubanId")
+                    return@runCatching null
                 }
-                val html = resp.body?.string() ?: return@use null
-                val doc = Jsoup.parse(html)
-                val d = DoubanDetail(doubanId = doubanId, doubanUrl = url)
+            } else html
+
+            parseDetailHtml(realHtml, doubanId, url)
+        }.getOrElse { e ->
+            android.util.Log.e("DoubanRepo", "getDetail FAILED for $doubanId", e)
+            null
+        }
+    }
+
+    private fun fetchHtml(url: String): String? {
+        val req = Request.Builder().url(url).get().build()
+        HttpClient.douban.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                android.util.Log.e("DoubanRepo", "fetchHtml HTTP ${resp.code} for $url")
+                return null
+            }
+            return resp.body?.string()
+        }
+    }
+
+    /** 解豆瓣 SHA-512 PoW 挑战 —— 和桌面版 Python 实现完全一致。
+     *  从 PoW 表单提取 tok/cha/red，找最小 nonce 使 SHA512(cha + nonce).hex 前 4 字符为 "0000"，
+     *  然后 POST 回 sec.douban.com/c 拿到真正的详情页 HTML。 */
+    private fun solveDoubanPow(powHtml: String): String? {
+        val tok = Regex("""name="tok"[^>]*value="([^"]+)"""").find(powHtml)?.groupValues?.get(1) ?: return null
+        val cha = Regex("""name="cha"[^>]*value="([^"]+)"""").find(powHtml)?.groupValues?.get(1) ?: return null
+        val red = Regex("""name="red"[^>]*value="([^"]+)"""").find(powHtml)?.groupValues?.get(1) ?: return null
+
+        // SHA-512 PoW：找最小 nonce 使 hash(cha + nonce) 前 4 个 hex 字符为 "0000"
+        val digest = java.security.MessageDigest.getInstance("SHA-512")
+        val hexSb = StringBuilder(128)
+        var nonce = 0L
+        while (true) {
+            nonce++
+            hexSb.clear()
+            val bytes = digest.digest((cha + nonce).toByteArray())
+            for (b in bytes) {
+                val s = (b.toInt() and 0xFF).toString(16)
+                if (s.length == 1) hexSb.append('0')
+                hexSb.append(s)
+            }
+            if (hexSb.length >= 4 && hexSb.substring(0, 4) == "0000") break
+        }
+        android.util.Log.d("DoubanRepo", "PoW nonce=$nonce (cha length=${cha.length})")
+
+        // POST 到 sec.douban.com/c（CookieJar 自动带上之前的 session cookie）
+        val form = okhttp3.FormBody.Builder()
+            .add("tok", tok).add("cha", cha)
+            .add("sol", nonce.toString()).add("red", red).build()
+        val req = Request.Builder().url("https://sec.douban.com/c").post(form).build()
+        HttpClient.douban.newCall(req).execute().use { resp ->
+            if (!resp.isSuccessful) {
+                android.util.Log.e("DoubanRepo", "PoW POST HTTP ${resp.code}")
+                return null
+            }
+            val html = resp.body?.string() ?: return null
+            return if (html.contains("v:itemreviewed")) html else null
+        }
+    }
+
+    private fun parseDetailHtml(html: String, doubanId: String, url: String): DoubanDetail? {
+        val doc = Jsoup.parse(html)
+        // 快速验证这是不是真正的详情页（不是 PoW 或错误页）
+        if (!html.contains("v:itemreviewed")) {
+            android.util.Log.e("DoubanRepo", "parseDetailHtml: HTML missing v:itemreviewed, got ${html.take(200)}")
+            return null
+        }
+        val d = DoubanDetail(doubanId = doubanId, doubanUrl = url)
 
                 // 标题 + 年份
                 doc.selectFirst("#content h1 span[property='v:itemreviewed']")?.let { d.title = it.text().trim() }
@@ -231,12 +298,7 @@ class DoubanRepository {
                 }
                 d.comments = comments
 
-                android.util.Log.d("DoubanRepo", "getDetail OK: title=${d.title}, rating=${d.rating}, comments=${d.comments.size}, distStar5=${d.ratingDist.star5}")
+                android.util.Log.d("DoubanRepo", "parseDetail OK: title=${d.title}, rating=${d.rating}, comments=${d.comments.size}")
                 d
-            }
-        }.getOrElse { e ->
-            android.util.Log.e("DoubanRepo", "getDetail FAILED for $doubanId", e)
-            null
-        }
     }
 }
