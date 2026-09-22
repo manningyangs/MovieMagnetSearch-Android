@@ -1,5 +1,6 @@
 package com.magnetsearch.data.repository
 
+import android.annotation.SuppressLint
 import com.magnetsearch.data.api.HttpClient
 import com.magnetsearch.data.model.DoubanComment
 import com.magnetsearch.data.model.DoubanDetail
@@ -241,12 +242,18 @@ class DoubanRepository {
         val resp1 = clientNoRedirect.newCall(req).execute()
         val location = resp1.header("Location")
         android.util.Log.d("DoubanRepo", "PoW POST B status=${resp1.code}, Location=$location")
+        // 关键 debug：打印 PoW POST 后 sec.douban.com 返回了哪些 Set-Cookie
+        resp1.headers("Set-Cookie").forEach { android.util.Log.d("DoubanRepo", "PoW Set-Cookie: $it") }
+        android.util.Log.d("DoubanRepo", "PoW cookies in jar: ${HttpClient.douban.cookieJar.loadForRequest(okhttp3.Request.Builder().url("https://sec.douban.com/").build())}")
         resp1.close()
         if (!location.isNullOrBlank()) {
             val redirectUrl = if (location.startsWith("/")) "https://movie.douban.com$location" else location
             val resp2 = clientNoRedirect.newCall(Request.Builder().url(redirectUrl).get().build()).execute()
             val body2 = resp2.body?.string() ?: ""
             android.util.Log.d("DoubanRepo", "PoW POST B redirect status=${resp2.code}, hasItemReviewed=${body2.contains("v:itemreviewed")}")
+            resp2.headers("Set-Cookie").forEach { android.util.Log.d("DoubanRepo", "PoW B redirect Set-Cookie: $it") }
+            // 手动打印 movie.douban.com 请求时 jar 里实际送了哪些 cookie
+            android.util.Log.d("DoubanRepo", "PoW B cookies for movie.douban.com: ${HttpClient.douban.cookieJar.loadForRequest(okhttp3.Request.Builder().url("https://movie.douban.com/").build())}")
             if (body2.contains("v:itemreviewed")) return body2
         }
 
@@ -266,6 +273,7 @@ class DoubanRepository {
         return null
     }
 
+    @SuppressLint("SuspiciousIndentation")
     private fun parseDetailHtml(html: String, doubanId: String, url: String): DoubanDetail? {
         val doc = Jsoup.parse(html)
         // 快速验证这是不是真正的详情页（不是 PoW 或错误页）
