@@ -32,5 +32,14 @@ data class DoubanDetail(
     var doubanUrl: String = "",
     var genres: List<String> = emptyList(),
     var countries: List<String> = emptyList(),
-    var duration: String = ""
+    var duration: String = "",
+    var comments: List<DoubanComment> = emptyList()  // 热门短评
+)
+
+@Serializable
+data class DoubanComment(
+    val author: String = "",
+    val rating: Float = 0f,   // 0-5 星，0 表示未打分
+    val content: String = "",
+    val date: String = ""
 )

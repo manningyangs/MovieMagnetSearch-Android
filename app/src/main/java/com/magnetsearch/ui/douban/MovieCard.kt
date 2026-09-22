@@ -25,6 +25,7 @@ import com.magnetsearch.ui.theme.*
 fun MovieCard(
     movie: DoubanMovie,
     onSearch: (String) -> Unit,
+    onClick: () -> Unit = {},
     modifier: Modifier = Modifier
 ) {
     val context = androidx.compose.ui.platform.LocalContext.current
@@ -32,6 +33,7 @@ fun MovieCard(
     Row(
         modifier = modifier
             .fillMaxWidth()
+            .clickable { onClick() }
             .padding(horizontal = 8.dp, vertical = 6.dp),
         horizontalArrangement = Arrangement.spacedBy(10.dp)
     ) {

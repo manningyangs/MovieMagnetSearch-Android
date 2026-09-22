@@ -1,6 +1,7 @@
 package com.magnetsearch.data.repository
 
 import com.magnetsearch.data.api.HttpClient
+import com.magnetsearch.data.model.DoubanComment
 import com.magnetsearch.data.model.DoubanDetail
 import com.magnetsearch.data.model.DoubanMovie
 import kotlinx.coroutines.Dispatchers
@@ -186,6 +187,19 @@ class DoubanRepository {
                 d.fullSummary = doc.selectFirst("span[property='v:summary']")?.text()?.trim()
                     ?: doc.selectFirst(".related-info .indent span")?.text()?.trim()
                     ?: ""
+
+                // 解析热门短评（前 5 条）
+                val comments = doc.select("#comments .comment-item").take(5).mapNotNull { item ->
+                    val author = item.selectFirst(".comment-info a")?.text()?.trim() ?: ""
+                    val content = item.selectFirst(".comment .short")?.text()?.trim() ?: ""
+                    val date = item.selectFirst(".comment-info .comment-time")?.text()?.trim() ?: ""
+                    // 评分："allstar50 main-title-rating" → 5.0
+                    val cls = item.selectFirst(".comment-info span[class*='allstar']")?.className() ?: ""
+                    val rating = Regex("""allstar(\d+)""").find(cls)?.groupValues?.get(1)
+                        ?.toFloatOrNull()?.div(10f) ?: 0f
+                    if (content.isBlank()) null else DoubanComment(author, rating, content, date)
+                }
+                d.comments = comments
 
                 d
             }
