@@ -4,6 +4,7 @@ import com.magnetsearch.data.api.HttpClient
 import com.magnetsearch.data.model.DoubanComment
 import com.magnetsearch.data.model.DoubanDetail
 import com.magnetsearch.data.model.DoubanMovie
+import com.magnetsearch.data.model.RatingDist
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.async
 import kotlinx.coroutines.awaitAll
@@ -164,36 +165,78 @@ class DoubanRepository {
                 val doc = Jsoup.parse(html)
                 val d = DoubanDetail(doubanId = doubanId, doubanUrl = url)
 
+                // 标题 + 年份
                 doc.selectFirst("#content h1 span[property='v:itemreviewed']")?.let {
                     d.title = it.text().trim()
                 }
+                doc.selectFirst("#content h1 .year")?.text()?.trim()?.let {
+                    d.year = it.removeSurrounding("(", ")")
+                }
+
+                // 评分 + 评价人数
                 doc.selectFirst(".rating_num[property='v:average']")?.text()?.toFloatOrNull()?.let {
                     d.rating = it
                 }
+                doc.selectFirst("span[property='v:votes']")?.text()?.toIntOrNull()?.let {
+                    d.voteCount = it
+                }
+
+                // 封面
                 doc.selectFirst("#mainpic img")?.attr("src")?.let { d.coverUrl = it }
 
+                // === #info 核心信息 ===
                 val info = doc.selectFirst("#info")
                 if (info != null) {
                     d.directors = info.select("a[rel='v:directedBy']").map { it.text().trim() }
-                    d.actors = info.select("a[rel='v:starring']").map { it.text().trim() }.take(5)
+                    d.writers = info.selectFirst("span:has(> a)")?.let { span ->
+                        // 编剧行：在导演行之后，格式 "编剧: 某某 / 某某"
+                        span.parent()?.children()?.getOrNull(1)?.let { writersSpan ->
+                            writersSpan.select("a").map { it.text().trim() }
+                        }
+                    } ?: emptyList()
+                    d.actors = info.select("a[rel='v:starring']").map { it.text().trim() }.take(10)
                     d.genres = info.select("span[property='v:genre']").map { it.text().trim() }
                     d.duration = info.selectFirst("span[property='v:runtime']")?.attr("content")
-                        ?: info.selectFirst("span[property='v:runtime']")?.text() ?: ""
+                        ?: info.selectFirst("span[property='v:runtime']")?.text()?.replace("分钟", "") ?: ""
+
                     val infoText = info.text()
                     d.countries = Regex("""制片国家/地区[:：]([^\n]+)""").find(infoText)
                         ?.groupValues?.get(1)?.split("/")?.map { it.trim() } ?: emptyList()
+                    d.languages = Regex("""语言[:：]([^\n]+)""").find(infoText)
+                        ?.groupValues?.get(1)?.split("/")?.map { it.trim() } ?: emptyList()
+                    d.aliases = Regex("""又名[:：]([^\n]+)""").find(infoText)
+                        ?.groupValues?.get(1)?.split("/")?.map { it.trim() } ?: emptyList()
+                    d.imdbId = Regex("""IMDb[:：]\s*(tt\d+)""", kotlin.text.RegexOption.IGNORE_CASE).find(infoText)
+                        ?.groupValues?.get(1) ?: ""
+
+                    // 上映日期：多个 span[property='v:initialReleaseDate']
+                    d.releaseDates = info.select("span[property='v:initialReleaseDate']")
+                        .map { it.text().trim() }
                 }
 
-                d.fullSummary = doc.selectFirst("span[property='v:summary']")?.text()?.trim()
-                    ?: doc.selectFirst(".related-info .indent span")?.text()?.trim()
+                // === 完整剧情简介 ===
+                // 豆瓣把完整简介放在 span.all.hidden 里（CSS 隐藏），短版在 span[property='v:summary']
+                d.fullSummary = doc.selectFirst("span.all.hidden")?.text()?.trim()
+                    ?: doc.selectFirst("span[property='v:summary']")?.text()?.trim()
                     ?: ""
 
-                // 解析热门短评（前 5 条）
+                // === 评分分布（5~1星百分比） ===
+                val ratingItems = doc.select(".ratings-on-weight .item, .rating_distribution .item")
+                if (ratingItems.size >= 5) {
+                    val dist = ratingItems.take(5).mapNotNull { item ->
+                        item.selectFirst(".rating_per")?.text()?.trim()
+                            ?.removeSuffix("%")?.toFloatOrNull()
+                    }
+                    if (dist.size == 5) {
+                        d.ratingDist = RatingDist(dist[0], dist[1], dist[2], dist[3], dist[4])
+                    }
+                }
+
+                // === 热门短评（前 5 条） ===
                 val comments = doc.select("#comments .comment-item").take(5).mapNotNull { item ->
                     val author = item.selectFirst(".comment-info a")?.text()?.trim() ?: ""
                     val content = item.selectFirst(".comment .short")?.text()?.trim() ?: ""
                     val date = item.selectFirst(".comment-info .comment-time")?.text()?.trim() ?: ""
-                    // 评分："allstar50 main-title-rating" → 5.0
                     val cls = item.selectFirst(".comment-info span[class*='allstar']")?.className() ?: ""
                     val rating = Regex("""allstar(\d+)""").find(cls)?.groupValues?.get(1)
                         ?.toFloatOrNull()?.div(10f) ?: 0f

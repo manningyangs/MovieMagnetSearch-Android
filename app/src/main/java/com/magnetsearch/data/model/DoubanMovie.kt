@@ -25,7 +25,14 @@ data class DoubanDetail(
     var year: String = "",
     var rating: Float = 0f,
     var directors: List<String> = emptyList(),
+    var writers: List<String> = emptyList(),
     var actors: List<String> = emptyList(),
+    var aliases: List<String> = emptyList(),       // 又名
+    var languages: List<String> = emptyList(),
+    var releaseDates: List<String> = emptyList(),  // 多个上映日期
+    var imdbId: String = "",                       // 如 tt0111161
+    var voteCount: Int = 0,                        // 评价人数
+    var ratingDist: RatingDist = RatingDist(),     // 5星~1星 分布
     var summary: String = "",
     var fullSummary: String = "",
     var coverUrl: String = "",
@@ -33,7 +40,16 @@ data class DoubanDetail(
     var genres: List<String> = emptyList(),
     var countries: List<String> = emptyList(),
     var duration: String = "",
-    var comments: List<DoubanComment> = emptyList()  // 热门短评
+    var comments: List<DoubanComment> = emptyList()
+)
+
+@Serializable
+data class RatingDist(
+    val star5: Float = 0f,  // 百分比 0~100
+    val star4: Float = 0f,
+    val star3: Float = 0f,
+    val star2: Float = 0f,
+    val star1: Float = 0f
 )
 
 @Serializable
