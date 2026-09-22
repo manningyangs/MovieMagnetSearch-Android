@@ -7,6 +7,7 @@ import com.magnetsearch.data.model.DoubanMovie
 import com.magnetsearch.data.repository.DoubanRepository
 import kotlinx.coroutines.flow.MutableStateFlow
 import kotlinx.coroutines.flow.StateFlow
+import kotlinx.coroutines.flow.asStateFlow
 import kotlinx.coroutines.launch
 
 data class DoubanUiState(
@@ -14,6 +15,9 @@ data class DoubanUiState(
     val movies: List<DoubanMovie> = emptyList(),
     val error: String? = null,
     val isTop250: Boolean = true,
+    // 分页：20 部一页
+    val pageSize: Int = 20,
+    val displayCount: Int = 20,
     // 详情页导航状态
     val selectedMovie: DoubanMovie? = null,       // 当前选中的电影（列表中的那个）
     val detailLoading: Boolean = false,
@@ -25,14 +29,26 @@ class DoubanViewModel : ViewModel() {
     private val repo = DoubanRepository()
 
     private val _uiState = MutableStateFlow(DoubanUiState())
-    val uiState: StateFlow<DoubanUiState> = _uiState
+    val uiState: StateFlow<DoubanUiState> = _uiState.asStateFlow()
+
+    /** 一次加载更多（+pageSize），直到加载完。返回 true 表示还有更多。 */
+    fun loadMore(): Boolean {
+        val s = _uiState.value
+        if (s.displayCount >= s.movies.size) return false
+        _uiState.value = s.copy(displayCount = (s.displayCount + s.pageSize).coerceAtMost(s.movies.size))
+        return _uiState.value.displayCount < _uiState.value.movies.size
+    }
 
     fun loadTop250() {
         _uiState.value = DoubanUiState(isLoading = true, isTop250 = true)
         viewModelScope.launch {
             runCatching { repo.getTop250(250) }
                 .onSuccess { movies ->
-                    _uiState.value = DoubanUiState(movies = movies, isTop250 = true)
+                    _uiState.value = DoubanUiState(
+                        movies = movies,
+                        isTop250 = true,
+                        displayCount = 20
+                    )
                 }
                 .onFailure { e ->
                     _uiState.value = DoubanUiState(error = e.message ?: "加载失败", isTop250 = true)
@@ -45,7 +61,11 @@ class DoubanViewModel : ViewModel() {
         viewModelScope.launch {
             runCatching { repo.search(query, 30) }
                 .onSuccess { movies ->
-                    _uiState.value = DoubanUiState(movies = movies, isTop250 = false)
+                    _uiState.value = DoubanUiState(
+                        movies = movies,
+                        isTop250 = false,
+                        displayCount = movies.size.coerceAtMost(20)
+                    )
                 }
                 .onFailure { e ->
                     _uiState.value = DoubanUiState(error = e.message ?: "搜索失败", isTop250 = false)
@@ -90,7 +110,7 @@ class DoubanViewModel : ViewModel() {
         }
     }
 
-    /** 返回按钮 → 回到列表页。 */
+    /** 返回按钮 → 回到列表页。列表和滚动位置由 Composable 保持不销毁，只清 selectedMovie。 */
     fun backToList() {
         _uiState.value = _uiState.value.copy(
             selectedMovie = null,

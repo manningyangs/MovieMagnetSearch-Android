@@ -1,0 +1,53 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Adaptive Icon 前景：白色磁力条 + 橙色磁极 + 上方胶片条 -->
+<!-- 画布 108x108dp，内容居中在 72x72dp 安全区 -->
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108"
+    android:tint="#FFFFFF">
+
+    <!-- ===== 胶片条（顶部横条 + 3 个圆孔）===== -->
+    <group>
+        <!-- 胶片横条 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M22,32 L86,32 L86,44 L22,44 Z" />
+        <!-- 3 个胶片圆孔 -->
+        <path
+            android:fillColor="#0D47A1"
+            android:pathData="M38,38m-4,0a4,4 0,1 1 8,0a4,4 0,1 1 -8,0" />
+        <path
+            android:fillColor="#0D47A1"
+            android:pathData="M54,38m-4,0a4,4 0,1 1 8,0a4,4 0,1 1 -8,0" />
+        <path
+            android:fillColor="#0D47A1"
+            android:pathData="M70,38m-4,0a4,4 0,1 1 8,0a4,4 0,1 1 -8,0" />
+    </group>
+
+    <!-- ===== U 型磁力条 ===== -->
+    <group android:translateX="0" android:translateY="0">
+        <!-- 左垂直臂 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M36,54 L48,54 L48,82 Q48,92 42,92 L36,92 L36,82 Z" />
+        <!-- 右垂直臂 -->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M60,54 L72,54 L72,82 Q72,92 66,92 L60,92 L60,82 Z" />
+        <!-- 底部连接弧（让 U 更圆）-->
+        <path
+            android:fillColor="#FFFFFF"
+            android:pathData="M48,82 Q48,96 54,96 Q60,96 60,82 L48,82 Z" />
+    </group>
+
+    <!-- ===== 橙色磁极（U 型顶端）===== -->
+    <path
+        android:fillColor="#FF9800"
+        android:pathData="M32,50 L52,50 L52,58 L32,58 Z" />
+    <path
+        android:fillColor="#FF9800"
+        android:pathData="M56,50 L76,50 L76,58 L56,58 Z" />
+
+</vector>

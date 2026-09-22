@@ -6,7 +6,9 @@
 
     <application
         android:allowBackup="true"
-        android:label="MovieMagnetSearch"
+        android:label="磁力搜影"
+        android:icon="@mipmap/ic_launcher"
+        android:roundIcon="@mipmap/ic_launcher_round"
         android:usesCleartextTraffic="true"
         android:theme="@style/Theme.MovieMagnetSearch">
 

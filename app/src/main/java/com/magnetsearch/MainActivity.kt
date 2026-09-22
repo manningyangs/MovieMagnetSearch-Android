@@ -10,6 +10,7 @@ import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Modifier
+import androidx.compose.ui.unit.dp
 import coil.Coil
 import coil.ImageLoader
 import coil.request.CachePolicy
@@ -17,6 +18,8 @@ import com.magnetsearch.data.api.HttpClient
 import com.magnetsearch.ui.douban.DoubanScreen
 import com.magnetsearch.ui.magnet.MagnetScreen
 import com.magnetsearch.ui.theme.MovieMagnetSearchTheme
+import com.magnetsearch.ui.theme.Primary
+import com.magnetsearch.ui.theme.Surface
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -40,7 +43,7 @@ class MainActivity : ComponentActivity() {
     }
 }
 
-private enum class Tab { MAGNET, DOUBAN }
+private enum class Tab { DOUBAN, MAGNET }
 
 @Composable
 private fun RootScaffold() {
@@ -49,18 +52,31 @@ private fun RootScaffold() {
 
     Scaffold(
         bottomBar = {
-            NavigationBar {
+            NavigationBar(
+                containerColor = Surface,
+                tonalElevation = 6.dp
+            ) {
                 NavigationBarItem(
                     selected = currentTab == Tab.DOUBAN,
                     onClick = { currentTab = Tab.DOUBAN },
-                    icon = { Icon(Icons.Default.Movie, null) },
-                    label = { Text("豆瓣发现") }
+                    icon = { Icon(Icons.Default.Movie, contentDescription = null) },
+                    label = { Text("豆瓣发现") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Primary,
+                        selectedTextColor = Primary,
+                        indicatorColor = Primary.copy(alpha = 0.12f)
+                    )
                 )
                 NavigationBarItem(
                     selected = currentTab == Tab.MAGNET,
                     onClick = { currentTab = Tab.MAGNET },
-                    icon = { Icon(Icons.Default.Search, null) },
-                    label = { Text("磁力搜索") }
+                    icon = { Icon(Icons.Default.Search, contentDescription = null) },
+                    label = { Text("磁力搜索") },
+                    colors = NavigationBarItemDefaults.colors(
+                        selectedIconColor = Primary,
+                        selectedTextColor = Primary,
+                        indicatorColor = Primary.copy(alpha = 0.12f)
+                    )
                 )
             }
         }
