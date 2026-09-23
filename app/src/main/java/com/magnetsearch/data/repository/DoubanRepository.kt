@@ -201,6 +201,16 @@ class DoubanRepository {
         }
     }
 
+    /** 判断 URL 是否是真视频文件（不是网页链接） */
+    private fun isVideoUrl(url: String): Boolean {
+        val lower = url.lowercase()
+        val extensions = listOf(".mp4", ".m3u8", ".webm", ".mkv", ".mov", ".m4v", ".3gp")
+        if (extensions.any { lower.contains(it) }) return true
+        // youku / youtube 嵌入链接也算（通常是媒体内容）
+        if (lower.contains("youku.com/v_show") || lower.contains("youtube.com/watch") || lower.contains("youtu.be/")) return true
+        return false
+    }
+
     /** 抓取预告片：独立页面 /subject/{id}/video。
      *  豆瓣 subject 详情页几乎不渲染预告片 DOM，必须去独立页抓。
      *  内置 PoW 兜底。 */
@@ -237,7 +247,8 @@ class DoubanRepository {
                         .ifBlank { a.attr("title") }
                         .ifBlank { img?.attr("alt") ?: "" }
                         .trim()
-                    if (videoUrl.isNotBlank() && videoUrl.startsWith("http")) {
+                    // 严格过滤：必须是真视频文件 URL，不能是网页链接
+                    if (videoUrl.isNotBlank() && videoUrl.startsWith("http") && isVideoUrl(videoUrl)) {
                         out += Trailer(title = title, videoUrl = videoUrl, coverUrl = cover)
                     }
                 }
@@ -628,7 +639,7 @@ class DoubanRepository {
                             val cover = img?.attr("data-src")?.ifBlank { img.attr("src") } ?: ""
                             val videoUrl = a.attr("data-video").ifBlank { a.attr("href") }
                             val title = a.attr("data-video-title").ifBlank { a.attr("title") }
-                            if (videoUrl.isNotBlank() && (videoUrl.endsWith(".mp4") || videoUrl.contains("youku") || videoUrl.contains("youtube") || cover.isNotBlank())) {
+                            if (videoUrl.isNotBlank() && isVideoUrl(videoUrl)) {
                                 trailers += Trailer(title, videoUrl, cover)
                             }
                         }
@@ -649,7 +660,7 @@ class DoubanRepository {
                         val cover = img?.attr("data-src")?.ifBlank { img.attr("src") } ?: ""
                         val videoUrl = a.attr("data-video").ifBlank { a.attr("href") }
                         val title = a.attr("data-video-title").ifBlank { a.attr("title") }.ifBlank { img?.attr("alt") }.orEmpty()
-                        if (videoUrl.isNotBlank() && videoUrl.startsWith("http")) {
+                        if (videoUrl.isNotBlank() && videoUrl.startsWith("http") && isVideoUrl(videoUrl)) {
                             trailers += Trailer(title, videoUrl, cover)
                         }
                     }

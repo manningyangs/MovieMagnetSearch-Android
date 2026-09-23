@@ -684,21 +684,37 @@ private fun DoubanDetailScreen(
                     val videoUrl = payload
                     val videoUri = Uri.parse(videoUrl)
                     val context = LocalContext.current
-                    AndroidView(
-                        factory = { ctx ->
-                            VideoView(ctx).apply {
-                                setVideoURI(videoUri)
-                                setOnPreparedListener { start() }
-                                setOnErrorListener { _, what, extra ->
-                                    android.util.Log.e("VideoPreview", "error what=$what extra=$extra")
-                                    // 视频加载失败 → 外部浏览器兜底
-                                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, videoUri)) }
-                                    true
+
+                    // 判断 URL 类型：真视频文件 → VideoView；否则直接跳外部浏览器
+                    val lower = videoUrl.lowercase()
+                    val isRealVideo = listOf(".mp4", ".m3u8", ".webm", ".mkv", ".mov", ".m4v", ".3gp").any { lower.contains(it) } ||
+                            lower.contains("youku.com/v_show") || lower.contains("youtube.com/watch") || lower.contains("youtu.be/")
+
+                    if (!isRealVideo) {
+                        // 直接跳外部浏览器（不经过 VideoView，避免崩溃）
+                        LaunchedEffect(Unit) {
+                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, videoUri)) }
+                            previewTarget = null
+                        }
+                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
+                            CircularProgressIndicator(color = Color.White)
+                        }
+                    } else {
+                        AndroidView(
+                            factory = { ctx ->
+                                VideoView(ctx).apply {
+                                    setVideoURI(videoUri)
+                                    setOnPreparedListener { start() }
+                                    setOnErrorListener { _, what, extra ->
+                                        android.util.Log.e("VideoPreview", "error what=$what extra=$extra")
+                                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, videoUri)) }
+                                        true
+                                    }
                                 }
-                            }
-                        },
-                        modifier = Modifier.fillMaxSize()
-                    )
+                            },
+                            modifier = Modifier.fillMaxSize()
+                        )
+                    }
                 }
             }
         }
