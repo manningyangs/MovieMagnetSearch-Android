@@ -161,7 +161,7 @@ class DoubanRepository {
         runCatching {
             warmUpCookie()
 
-            // === 两个并行任务：主详情 HTML + 影评 ===
+            // === 三个并行任务：主详情 HTML + 演职员头像 + 影评 ===
             val detailTask = async {
                 val html = fetchHtml(url) ?: return@async null
                 val realHtml = if (html.contains("载入中") && html.contains("name=\"cha\"")) {
@@ -170,11 +170,15 @@ class DoubanRepository {
                 } else html
                 parseDetailHtml(realHtml, doubanId, url)
             }
+            val celebrityTask = async {
+                runCatching { fetchCelebrities(doubanId) }.getOrElse { emptyList() }
+            }
             val reviewTask = async {
                 runCatching { fetchReviews(doubanId) }.getOrElse { emptyList() }
             }
 
             val detail = detailTask.await() ?: return@runCatching null
+            detail.castMembers = celebrityTask.await()
             detail.reviews = reviewTask.await()
             detail
         }.getOrElse { e ->
@@ -226,6 +230,64 @@ class DoubanRepository {
             if (out.size >= 5) break
         }
         return out
+    }
+
+    /** 抓取演职员头像：独立页面 /subject/{id}/celebrities。
+     *  subject 详情页本身**不渲染头像**，只有 personage 名字链接。 */
+    private fun fetchCelebrities(doubanId: String): List<CastMember> {
+        val url = "https://movie.douban.com/subject/$doubanId/celebrities"
+        val req = Request.Builder().url(url).get()
+            .header("User-Agent", UA)
+            .header("Referer", "https://movie.douban.com/subject/$doubanId/")
+            .build()
+        val resp = HttpClient.douban.newCall(req).execute()
+        if (!resp.isSuccessful) {
+            android.util.Log.d("DoubanRepo", "fetchCelebrities HTTP ${resp.code}")
+            return emptyList()
+        }
+        val html = resp.body?.string() ?: return emptyList()
+        if (!html.contains("celebrit")) {
+            android.util.Log.d("DoubanRepo", "fetchCelebrities: not celebrities page (body head: ${html.take(150)})")
+            return emptyList()
+        }
+        val doc = Jsoup.parse(html)
+        val out = mutableListOf<CastMember>()
+
+        // 多 selector 兜底：豆瓣 celebrities 页面有两种 DOM 结构
+        val selectors = listOf(
+            "li",                                  // 新版：ul.celebrities > li
+            "li.celebrity",                        // 旧版：li class=celebrity
+            ".celebrities li",                     // 通用
+            "div[class*='celebrit'] li",           // 通用
+        )
+        val nodes = selectors.firstNotNullOfOrNull { sel ->
+            val ns = doc.select(sel)
+            if (ns.size >= 2) ns else null  // 至少 2 条才算匹配到了
+        } ?: return emptyList()
+
+        android.util.Log.d("DoubanRepo", "fetchCelebrities matched ${nodes.size} nodes")
+        nodes.forEach { node ->
+            val aLink = node.selectFirst("a[href*='personage']") ?: node.selectFirst("a")
+            val href = aLink?.attr("href")?.let { if (it.startsWith("/")) "https://movie.douban.com$it" else it } ?: ""
+            val img = node.selectFirst("img")
+            val avatar = img?.attr("data-src")?.ifBlank { img.attr("src") } ?: ""
+            // 如果头像还是空，用豆瓣默认头像
+            val finalAvatar = avatar.ifBlank {
+                "https://img9.doubanio.com/f/movie/ca8cc52cb269b4e425aed519e677d7ac19edc715/pics/celebrity-none.png"
+            }
+            // 名字：优先 .name > img alt > a title
+            val name = node.selectFirst(".name, .celebrity-name, .actor-name")?.text()?.trim()
+                ?: img?.attr("alt")?.trim()
+                ?: aLink?.attr("title")?.trim()
+                ?: ""
+            // 角色：优先 .role / .character / span[class*='char']
+            val role = node.selectFirst(".role, .character, .celebrity-role, span[class*='char'], span[class*='role']")
+                ?.text()?.trim()
+                ?: ""
+            if (name.isNotBlank()) out += CastMember(name = name, role = role, avatarUrl = finalAvatar, doubanUrl = href)
+        }
+        android.util.Log.d("DoubanRepo", "fetchCelebrities final count=${out.size}, first=${out.firstOrNull()?.name}/${out.firstOrNull()?.role}")
+        return out.take(20)  // 最多 20 个，够了
     }
 
     private fun fetchHtml(url: String): String? {
@@ -406,36 +468,7 @@ class DoubanRepository {
                 }
                 d.comments = comments
 
-                // === 演职员照片（多 selector 兜底） ===
-                val castMembers = mutableListOf<CastMember>()
-                val castSelectors = listOf(
-                    "#celebrities .celebrity",
-                    "#celebrities li",
-                    ".celebrities .celebrity",
-                    "div[id*='celeb'] li",
-                    "#info .celebrity"
-                )
-                for (sel in castSelectors) {
-                    val nodes = doc.select(sel)
-                    android.util.Log.d("DoubanRepo", "CAST selector '$sel' matched ${nodes.size} nodes")
-                    if (nodes.isNotEmpty()) {
-                        nodes.forEach { celeb ->
-                            val aLink = celeb.selectFirst("a")
-                            val href = aLink?.attr("href")?.let {
-                                if (it.startsWith("/")) "https://movie.douban.com$it" else it
-                            } ?: ""
-                            val img = celeb.selectFirst("img")
-                            val avatar = img?.attr("data-src")?.ifBlank { img.attr("src") } ?: ""
-                            val name = celeb.selectFirst(".celebrity-name, .name, a[title]")?.text()?.trim()
-                                ?: img?.attr("alt")?.trim() ?: ""
-                            val role = celeb.selectFirst(".celebrity-role, .role, .character")?.text()?.trim() ?: ""
-                            if (name.isNotBlank()) castMembers += CastMember(name, role, avatar, href)
-                        }
-                        break
-                    }
-                }
-                d.castMembers = castMembers
-                android.util.Log.d("DoubanRepo", "CAST final count=${castMembers.size}, first avatar=${castMembers.firstOrNull()?.avatarUrl?.take(80)}")
+                // === 演职员头像已由并行的 fetchCelebrities 任务填充（详见 getDetail） ===
 
                 // === 预告片（多 selector 兜底） ===
                 val trailers = mutableListOf<Trailer>()

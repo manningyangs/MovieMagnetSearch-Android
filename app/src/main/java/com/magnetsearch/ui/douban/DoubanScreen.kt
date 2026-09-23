@@ -339,6 +339,14 @@ private fun DoubanDetailScreen(
     val year = d?.year?.takeIf { it.isNotBlank() } ?: movie.year
     val rating = d?.rating?.takeIf { it > 0f } ?: movie.rating
 
+    // === 全屏剧照预览 state ===
+    var expandedStillIndex by remember { mutableStateOf<Int?>(null) }
+    val stills = d?.stills ?: emptyList()
+
+    // 全屏预览时，返回键关闭预览而非退出详情页
+    BackHandler(enabled = expandedStillIndex != null) { expandedStillIndex = null }
+
+    Box(Modifier.fillMaxSize()) {
     Scaffold(
         topBar = {
             TopAppBar(
@@ -474,48 +482,38 @@ private fun DoubanDetailScreen(
                 }
             }
 
-            // === 剧照网格 ===
-            val stills = d?.stills ?: emptyList()
+            // === 剧照网格（点击触发全屏预览） ===
             if (stills.isNotEmpty()) {
                 item {
                     Text("剧照", fontWeight = FontWeight.Bold, fontSize = 14.sp,
                         modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
                 }
-                // 每行 3 张
-                val rows = stills.chunked(3)
-                rows.forEach { rowStills ->
+                // 每行 3 张，保留全局索引
+                val rows = stills.withIndex().chunked(3)
+                rows.forEach { rowWithIdx ->
                     item {
                         Row(
                             modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
                             horizontalArrangement = Arrangement.spacedBy(6.dp)
                         ) {
-                            rowStills.forEachIndexed { idx, url ->
-                                val isLast = idx == rowStills.size - 1
-                                val weight = if (isLast && rowStills.size == 1) 1f else 1f
+                            rowWithIdx.forEachIndexed { rowIdx, iv ->
                                 Box(
-                                    modifier = Modifier.weight(weight)
+                                    modifier = Modifier.weight(1f)
                                         .height(100.dp)
                                         .clip(RoundedCornerShape(6.dp))
                                         .background(Divider)
-                                        .clickable {
-                                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
-                                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
-                                            context.startActivity(intent)
-                                        }
+                                        .clickable { expandedStillIndex = iv.index }
                                 ) {
                                     AsyncImage(
-                                        model = url, contentDescription = "剧照",
+                                        model = iv.value, contentDescription = "剧照",
                                         modifier = Modifier.fillMaxSize(),
                                         contentScale = ContentScale.Crop,
                                         placeholder = painterResource(id = android.R.drawable.ic_menu_report_image),
                                         error = painterResource(id = android.R.drawable.ic_menu_report_image)
                                     )
                                 }
-                                // 如果是最后一张且当前行不足 3 张，补空白占位让其他图均匀分布
-                                if (isLast && rowStills.size < 3) {
-                                    repeat(3 - rowStills.size) {
-                                        Box(Modifier.weight(1f))
-                                    }
+                                if (rowIdx == rowWithIdx.size - 1 && rowWithIdx.size < 3) {
+                                    repeat(3 - rowWithIdx.size) { Box(Modifier.weight(1f)) }
                                 }
                             }
                         }
@@ -627,9 +625,54 @@ private fun DoubanDetailScreen(
             }
 
             item { Spacer(Modifier.height(24.dp)) }
+        }  // LazyColumn
+    }  // Scaffold
+
+    // === 全屏剧照预览 overlay（淡入淡出） ===
+    AnimatedVisibility(
+        visible = expandedStillIndex != null,
+        enter = fadeIn(), exit = fadeOut()
+    ) {
+        val idx = expandedStillIndex ?: return@AnimatedVisibility
+        val url = stills.getOrNull(idx) ?: return@AnimatedVisibility
+        Box(
+            Modifier.fillMaxSize()
+                .background(Color.Black.copy(alpha = 0.95f))
+                .clickable { expandedStillIndex = null }
+        ) {
+            AsyncImage(
+                model = url, contentDescription = "剧照",
+                modifier = Modifier.fillMaxSize().padding(24.dp),
+                contentScale = ContentScale.Fit
+            )
+            IconButton(
+                onClick = { expandedStillIndex = null },
+                modifier = Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 8.dp)
+            ) {
+                Icon(Icons.AutoMirrored.Filled.ArrowBack, "关闭", tint = Color.White, modifier = Modifier.size(28.dp))
+            }
+            if (idx > 0) {
+                IconButton(
+                    onClick = { expandedStillIndex = idx - 1 },
+                    modifier = Modifier.align(Alignment.CenterStart)
+                ) { Icon(Icons.Default.ChevronLeft, "上一张", tint = Color.White, modifier = Modifier.size(42.dp)) }
+            }
+            if (idx < stills.size - 1) {
+                IconButton(
+                    onClick = { expandedStillIndex = idx + 1 },
+                    modifier = Modifier.align(Alignment.CenterEnd)
+                ) { Icon(Icons.Default.ChevronRight, "下一张", tint = Color.White, modifier = Modifier.size(42.dp)) }
+            }
+            Text(
+                "${idx + 1} / ${stills.size}",
+                color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp)
+            )
         }
     }
-}
+
+    }  // Box close (wraps Scaffold + overlay)
+}  // DoubanDetailScreen close
 
 // ============================================================
 // 演职员头像横滑项
