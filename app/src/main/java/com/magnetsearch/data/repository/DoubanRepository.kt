@@ -217,7 +217,11 @@ class DoubanRepository {
 
     /** 宽松过滤：只要 coverUrl 有就是有效 trailer（点击走外部 Intent）。 */
     private fun isValidTrailer(coverUrl: String): Boolean {
-        return coverUrl.isNotBlank() && coverUrl.contains("doubanio.com")
+        val ok = coverUrl.isNotBlank() && coverUrl.contains("doubanio.com")
+        if (!ok && coverUrl.isNotBlank()) {
+            android.util.Log.d("DoubanRepo", "isValidTrailer REJECTED cover=[$coverUrl]")
+        }
+        return ok
     }
 
     /** 抓取预告片：独立页面 /subject/{id}/video。
@@ -245,6 +249,9 @@ class DoubanRepository {
             val nodes = doc.select(sel)
             android.util.Log.d("DoubanRepo", "TRAILER(video page) '$sel' matched ${nodes.size}")
             if (nodes.isNotEmpty()) {
+                // DEBUG：打印第一个节点的关键属性
+                val first = nodes.first()
+                android.util.Log.d("DoubanRepo", "TRAILER(video page) first[href=${first.attr("href")}, data-video=${first.attr("data-video")}, hasImg=${first.selectFirst("img") != null}, imgSrc=${first.selectFirst("img")?.attr("src")}, imgDataSrc=${first.selectFirst("img")?.attr("data-src")}]")
                 nodes.forEach { a ->
                     val videoUrl = a.attr("data-video")
                         .ifBlank { a.attr("data-video-url") }
@@ -648,7 +655,11 @@ class DoubanRepository {
                             val cover = img?.attr("data-src")?.ifBlank { img.attr("src") } ?: ""
                             val videoUrl = a.attr("data-video").ifBlank { a.attr("href") }
                             val title = a.attr("data-video-title").ifBlank { a.attr("title") }
-                            if (videoUrl.isNotBlank() && isValidTrailer(cover)) {
+                            // subject 页：有 cover 就算；没 cover 但 videoUrl 看起来像 trailer 也收
+                            val looksLikeTrailer = videoUrl.contains("video") || videoUrl.contains("trailer") ||
+                                    videoUrl.contains("link2") || videoUrl.contains("youku") ||
+                                    videoUrl.contains("youtube") || videoUrl.contains("qq.com")
+                            if (videoUrl.isNotBlank() && cover.isNotBlank() || videoUrl.isNotBlank() && looksLikeTrailer) {
                                 trailers += Trailer(title, videoUrl, cover)
                             }
                         }
@@ -661,7 +672,7 @@ class DoubanRepository {
                     val videoLinks = doc.select("a").filter { a ->
                         val href = a.attr("href")
                         val dv = a.attr("data-video")
-                        dv.isNotBlank() || href.endsWith(".mp4") || href.contains("youku") || href.contains("youtube") || href.contains("video")
+                        dv.isNotBlank() || href.endsWith(".mp4") || href.contains("youku") || href.contains("youtube") || href.contains("video") || href.contains("trailer") || href.contains("link2") || href.contains("qq.com")
                     }
                     android.util.Log.d("DoubanRepo", "TRAILER fallback: ${videoLinks.size} video-like links")
                     videoLinks.forEach { a ->
@@ -669,7 +680,8 @@ class DoubanRepository {
                         val cover = img?.attr("data-src")?.ifBlank { img.attr("src") } ?: ""
                         val videoUrl = a.attr("data-video").ifBlank { a.attr("href") }
                         val title = a.attr("data-video-title").ifBlank { a.attr("title") }.ifBlank { img?.attr("alt") }.orEmpty()
-                        if (videoUrl.isNotBlank() && videoUrl.startsWith("http") && isValidTrailer(cover)) {
+                        // fallback：只要 videoUrl 是 http 且像 trailer 就收，cover 有无都行
+                        if (videoUrl.isNotBlank() && videoUrl.startsWith("http")) {
                             trailers += Trailer(title, videoUrl, cover)
                         }
                     }
