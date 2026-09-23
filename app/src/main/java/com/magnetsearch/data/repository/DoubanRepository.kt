@@ -169,23 +169,30 @@ class DoubanRepository {
             }
             val detail = parseDetailHtml(html, doubanId, url) ?: return@runCatching null
 
-            // === Step 2: PoW cookie 已经生效 → 并行拉 celebrities + trailers + reviews ===
+            // === Step 2: PoW cookie 已经生效 → 并行拉 celebrities + trailers + stills + reviews ===
             val celebrityTask = async {
                 runCatching { fetchCelebrities(doubanId) }.getOrElse { emptyList() }
             }
             val trailerTask = async {
                 runCatching { fetchTrailers(doubanId) }.getOrElse { emptyList() }
             }
+            val stillsTask = async {
+                runCatching { fetchStills(doubanId) }.getOrElse { emptyList() }
+            }
             val reviewTask = async {
                 runCatching { fetchReviews(doubanId) }.getOrElse { emptyList() }
             }
 
             detail.castMembers = celebrityTask.await()
-            val trailersFromSubject = detail.trailers  // subject 页里可能也有（少量）
+            val trailersFromSubject = detail.trailers
             val trailersFromVideoPage = trailerTask.await()
-            // 合并去重（按 videoUrl）
             detail.trailers = (trailersFromSubject + trailersFromVideoPage)
                 .distinctBy { it.videoUrl }
+            val stillsFromSubject = detail.stills
+            val stillsFromPhotosPage = stillsTask.await()
+            // 合并去重（剧照 URL 通常有 size 参数，按核心路径去重）
+            detail.stills = (stillsFromSubject + stillsFromPhotosPage)
+                .distinctBy { it.substringBefore('?').substringAfterLast('/') }
             detail.reviews = reviewTask.await()
             detail
         }.getOrElse { e ->
@@ -250,6 +257,45 @@ class DoubanRepository {
         }
 
         android.util.Log.d("DoubanRepo", "fetchTrailers final count=${out.size}")
+        return out
+    }
+
+    /** 抓取完整剧照：独立页面 /subject/{id}/photos。
+     *  subject 详情页只渲染 4~6 张缩略图，完整剧照在 photos 页面。 */
+    private fun fetchStills(doubanId: String): List<String> {
+        val pageUrl = "https://movie.douban.com/subject/$doubanId/photos"
+        var html = fetchHtml(pageUrl) ?: return emptyList()
+        if (html.contains("载入中") && html.contains("name=\"cha\"")) {
+            android.util.Log.d("DoubanRepo", "fetchStills got PoW, solving...")
+            html = solveDoubanPow(html, pageUrl) ?: return emptyList()
+        }
+        val doc = Jsoup.parse(html)
+        val out = mutableListOf<String>()
+
+        // 多 selector 兜底
+        val selectors = listOf(
+            ".photo-list img",
+            "#content img[src*='doubanio.com/view/photo']",
+            "a[href*='/photo/'] img",
+            ".article img",
+            "img[src*='doubanio.com/view/photo']",
+        )
+        for (sel in selectors) {
+            val nodes = doc.select(sel)
+            android.util.Log.d("DoubanRepo", "STILLS(photos page) '$sel' matched ${nodes.size}")
+            if (nodes.isNotEmpty()) {
+                nodes.forEach { img ->
+                    val url = img.attr("data-src")
+                        .ifBlank { img.attr("src") }
+                        .trim()
+                    if (url.isNotBlank() && url.contains("doubanio.com")) {
+                        out += url
+                    }
+                }
+                if (out.size >= 10) break  // 够多了就停
+            }
+        }
+        android.util.Log.d("DoubanRepo", "fetchStills final count=${out.size}")
         return out
     }
 
