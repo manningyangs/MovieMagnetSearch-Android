@@ -11,8 +11,8 @@ android {
         applicationId = "com.magnetsearch"
         minSdk = 24
         targetSdk = 34
-        versionCode = 1
-        versionName = "1.0.0"
+        versionCode = 2
+        versionName = "1.1.1"
     }
 
     // Release 签名 —— 用 debug keystore 快速打包（正式发布请换成自有 keystore）
