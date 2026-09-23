@@ -253,16 +253,17 @@ class DoubanRepository {
         val doc = Jsoup.parse(html)
         val out = mutableListOf<CastMember>()
 
-        // 多 selector 兜底：豆瓣 celebrities 页面有两种 DOM 结构
+        // 多 selector 兜底：**从最具体的开始匹配**，"li" 太宽泛放最后
         val selectors = listOf(
-            "li",                                  // 新版：ul.celebrities > li
             "li.celebrity",                        // 旧版：li class=celebrity
             ".celebrities li",                     // 通用
             "div[class*='celebrit'] li",           // 通用
+            "li",                                  // 最后兜底：全页 li
         )
         val nodes = selectors.firstNotNullOfOrNull { sel ->
             val ns = doc.select(sel)
-            if (ns.size >= 2) ns else null  // 至少 2 条才算匹配到了
+            // 至少 2 条才算匹配到了，而且**第一条必须有 personage 链接或 img**
+            if (ns.size >= 2 && ns.firstOrNull()?.selectFirst("a[href*='personage'], img") != null) ns else null
         } ?: return emptyList()
 
         android.util.Log.d("DoubanRepo", "fetchCelebrities matched ${nodes.size} nodes")
@@ -270,24 +271,25 @@ class DoubanRepository {
             val aLink = node.selectFirst("a[href*='personage']") ?: node.selectFirst("a")
             val href = aLink?.attr("href")?.let { if (it.startsWith("/")) "https://movie.douban.com$it" else it } ?: ""
             val img = node.selectFirst("img")
-            val avatar = img?.attr("data-src")?.ifBlank { img.attr("src") } ?: ""
-            // 如果头像还是空，用豆瓣默认头像
-            val finalAvatar = avatar.ifBlank {
-                "https://img9.doubanio.com/f/movie/ca8cc52cb269b4e425aed519e677d7ac19edc715/pics/celebrity-none.png"
-            }
-            // 名字：优先 .name > img alt > a title
+            // 头像：data-src 优先，其次 src。**空就跳过，不用豆瓣那个返回 0 字节的 fallback**
+            val avatar = img?.attr("data-src")?.ifBlank { img.attr("src") }?.trim().orEmpty()
+            // 名字：优先 .name > img alt > a title > a text
             val name = node.selectFirst(".name, .celebrity-name, .actor-name")?.text()?.trim()
                 ?: img?.attr("alt")?.trim()
                 ?: aLink?.attr("title")?.trim()
+                ?: aLink?.text()?.trim()
                 ?: ""
-            // 角色：优先 .role / .character / span[class*='char']
+            // 角色
             val role = node.selectFirst(".role, .character, .celebrity-role, span[class*='char'], span[class*='role']")
                 ?.text()?.trim()
                 ?: ""
-            if (name.isNotBlank()) out += CastMember(name = name, role = role, avatarUrl = finalAvatar, doubanUrl = href)
+            // 必须名字非空 + 头像非空才收进来（跳过导航/分页等无关 li）
+            if (name.isNotBlank() && avatar.isNotBlank()) {
+                out += CastMember(name = name, role = role, avatarUrl = avatar, doubanUrl = href)
+            }
         }
-        android.util.Log.d("DoubanRepo", "fetchCelebrities final count=${out.size}, first=${out.firstOrNull()?.name}/${out.firstOrNull()?.role}")
-        return out.take(20)  // 最多 20 个，够了
+        android.util.Log.d("DoubanRepo", "fetchCelebrities final count=${out.size}, first=${out.firstOrNull()?.name}/${out.firstOrNull()?.role}/img=${out.firstOrNull()?.avatarUrl?.take(60)}")
+        return out.take(20)
     }
 
     private fun fetchHtml(url: String): String? {
