@@ -654,7 +654,17 @@ class DoubanRepository {
                             val img = a.selectFirst("img")
                             val cover = img?.attr("data-src")?.ifBlank { img.attr("src") } ?: ""
                             val videoUrl = a.attr("data-video").ifBlank { a.attr("href") }
-                            val title = a.attr("data-video-title").ifBlank { a.attr("title") }
+                            // title 从 attr + 元素 text + 附近文字节点三重取
+                            val title = a.attr("data-video-title")
+                                .ifBlank { a.attr("title") }
+                                .ifBlank { a.text().trim() }
+                                .ifBlank {
+                                    // 找最近带文字的 sibling / parent
+                                    a.siblingElements().firstOrNull()?.text()?.trim()
+                                        ?: a.parent()?.text()?.trim()?.take(30)
+                                }
+                                .orEmpty()
+                            android.util.Log.d("DoubanRepo", "TRAILER item: title=[$title] href=[${videoUrl.take(60)}]")
                             // subject 页：有 cover 就算；没 cover 但 videoUrl 看起来像 trailer 也收
                             val looksLikeTrailer = videoUrl.contains("video") || videoUrl.contains("trailer") ||
                                     videoUrl.contains("link2") || videoUrl.contains("youku") ||
@@ -723,7 +733,14 @@ class DoubanRepository {
                     }
                 }
 
-                d.trailers = trailers
+                // trailer 过滤：title 必须含"预告"或"trailer"才算真预告片
+                val trailerKw = listOf("预告", "trailer", "Trailer", "TRAILER")
+                val filtered = trailers.filter { t ->
+                    trailerKw.any { kw -> t.title.contains(kw, ignoreCase = true) }
+                }
+                d.trailers = filtered
+                android.util.Log.d("DoubanRepo", "TRAILER filter: ${trailers.size} -> ${filtered.size}")
+                android.util.Log.d("DoubanRepo", "TRAILER final count=${d.trailers.size}, first cover=${d.trailers.firstOrNull()?.coverUrl?.take(80)}")
 
                 // === 剧照（多 selector 兜底）——先解析，trailer 可复用 ===
                 val trailerCoverSet = trailers.map { it.coverUrl }.toSet()
