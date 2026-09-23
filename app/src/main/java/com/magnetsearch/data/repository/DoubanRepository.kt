@@ -201,13 +201,17 @@ class DoubanRepository {
         }
     }
 
-    /** 判断 URL 是否是真视频文件（不是网页链接） */
+    /** 判断 URL 是否是真视频文件（不是网页链接或重定向包装） */
     private fun isVideoUrl(url: String): Boolean {
         val lower = url.lowercase()
-        val extensions = listOf(".mp4", ".m3u8", ".webm", ".mkv", ".mov", ".m4v", ".3gp")
+        // 先排除明显非视频的：html/htm 网页、豆瓣重定向包装
+        if (lower.contains(".html") || lower.contains(".htm") || lower.contains(".php") || lower.contains(".asp")) return false
+        if (lower.contains("douban.com/link2")) return false
+        // 白名单：媒体扩展名
+        val extensions = listOf(".mp4", ".m3u8", ".webm", ".mkv", ".mov", ".m4v", ".3gp", ".flv", ".avi", ".ts")
         if (extensions.any { lower.contains(it) }) return true
-        // youku / youtube 嵌入链接也算（通常是媒体内容）
-        if (lower.contains("youku.com/v_show") || lower.contains("youtube.com/watch") || lower.contains("youtu.be/")) return true
+        // youku / youtube 嵌入链接（带具体视频路径，不是网页）
+        if (lower.contains("youku.com/v_show/id_") || lower.contains("youtube.com/watch?v=") || lower.contains("youtu.be/")) return true
         return false
     }
 

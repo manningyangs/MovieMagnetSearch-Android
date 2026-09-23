@@ -687,8 +687,13 @@ private fun DoubanDetailScreen(
 
                     // 判断 URL 类型：真视频文件 → VideoView；否则直接跳外部浏览器
                     val lower = videoUrl.lowercase()
-                    val isRealVideo = listOf(".mp4", ".m3u8", ".webm", ".mkv", ".mov", ".m4v", ".3gp").any { lower.contains(it) } ||
-                            lower.contains("youku.com/v_show") || lower.contains("youtube.com/watch") || lower.contains("youtu.be/")
+                    // 黑名单：html 网页、豆瓣重定向包装 → 直接 Intent
+                    val isNotMedia = lower.contains(".html") || lower.contains(".htm") ||
+                            lower.contains(".php") || lower.contains(".asp") ||
+                            lower.contains("douban.com/link2")
+                    // 白名单：媒体扩展名
+                    val isRealVideo = !isNotMedia && listOf(".mp4", ".m3u8", ".webm", ".mkv", ".mov", ".m4v", ".3gp", ".flv", ".avi", ".ts").any { lower.contains(it) } ||
+                            (!isNotMedia && (lower.contains("youku.com/v_show/id_") || lower.contains("youtube.com/watch?v=") || lower.contains("youtu.be/")))
 
                     if (!isRealVideo) {
                         // 直接跳外部浏览器（不经过 VideoView，避免崩溃）
