@@ -215,6 +215,11 @@ class DoubanRepository {
         return false
     }
 
+    /** 宽松过滤：只要 coverUrl 有就是有效 trailer（点击走外部 Intent）。 */
+    private fun isValidTrailer(coverUrl: String): Boolean {
+        return coverUrl.isNotBlank() && coverUrl.contains("doubanio.com")
+    }
+
     /** 抓取预告片：独立页面 /subject/{id}/video。
      *  豆瓣 subject 详情页几乎不渲染预告片 DOM，必须去独立页抓。
      *  内置 PoW 兜底。 */
@@ -251,8 +256,8 @@ class DoubanRepository {
                         .ifBlank { a.attr("title") }
                         .ifBlank { img?.attr("alt") ?: "" }
                         .trim()
-                    // 严格过滤：必须是真视频文件 URL，不能是网页链接
-                    if (videoUrl.isNotBlank() && videoUrl.startsWith("http") && isVideoUrl(videoUrl)) {
+                    // 宽松过滤：只要 cover 有就是有效 trailer（点击走外部 Intent）
+                    if (videoUrl.isNotBlank() && videoUrl.startsWith("http") && isValidTrailer(cover)) {
                         out += Trailer(title = title, videoUrl = videoUrl, coverUrl = cover)
                     }
                 }
@@ -643,7 +648,7 @@ class DoubanRepository {
                             val cover = img?.attr("data-src")?.ifBlank { img.attr("src") } ?: ""
                             val videoUrl = a.attr("data-video").ifBlank { a.attr("href") }
                             val title = a.attr("data-video-title").ifBlank { a.attr("title") }
-                            if (videoUrl.isNotBlank() && isVideoUrl(videoUrl)) {
+                            if (videoUrl.isNotBlank() && isValidTrailer(cover)) {
                                 trailers += Trailer(title, videoUrl, cover)
                             }
                         }
@@ -664,7 +669,7 @@ class DoubanRepository {
                         val cover = img?.attr("data-src")?.ifBlank { img.attr("src") } ?: ""
                         val videoUrl = a.attr("data-video").ifBlank { a.attr("href") }
                         val title = a.attr("data-video-title").ifBlank { a.attr("title") }.ifBlank { img?.attr("alt") }.orEmpty()
-                        if (videoUrl.isNotBlank() && videoUrl.startsWith("http") && isVideoUrl(videoUrl)) {
+                        if (videoUrl.isNotBlank() && videoUrl.startsWith("http") && isValidTrailer(cover)) {
                             trailers += Trailer(title, videoUrl, cover)
                         }
                     }

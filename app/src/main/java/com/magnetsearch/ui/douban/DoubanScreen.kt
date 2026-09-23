@@ -479,7 +479,11 @@ private fun DoubanDetailScreen(
                 item {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(trailers) { trailer ->
-                            TrailerCard(trailer) { previewTarget = "video:${trailer.videoUrl}" }
+                            TrailerCard(trailer) {
+                                runCatching {
+                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(trailer.videoUrl)))
+                                }
+                            }
                         }
                     }
                     HorizontalDivider(color = Divider, thickness = 0.5.dp, modifier = Modifier.padding(top = 8.dp))
@@ -506,7 +510,7 @@ private fun DoubanDetailScreen(
                                         .height(100.dp)
                                         .clip(RoundedCornerShape(6.dp))
                                         .background(Divider)
-                                        .clickable { previewTarget = "image:${iv.index}" }
+                                        .clickable { previewTarget = iv.index.toString() }
                                 ) {
                                     AsyncImage(
                                         model = iv.value, contentDescription = "剧照",
@@ -632,18 +636,27 @@ private fun DoubanDetailScreen(
         }  // LazyColumn
     }  // Scaffold
 
-    // === 统一预览 overlay：剧照大图 + 预告片视频 ===
+    // === 剧照全屏预览 overlay（LazyRow 横向滚动） ===
     AnimatedVisibility(
         visible = previewTarget != null,
         enter = fadeIn(), exit = fadeOut()
     ) {
-        val target = previewTarget ?: return@AnimatedVisibility
-        val (type, payload) = target.split(":", limit = 2)
+        val startIdx = previewTarget?.toIntOrNull() ?: 0
+        val listState = rememberLazyListState()
+        LaunchedEffect(startIdx) {
+            listState.scrollToItem(startIdx)
+        }
+        val currentIdx by remember {
+            derivedStateOf {
+                val layoutInfo = listState.layoutInfo
+                val first = layoutInfo.visibleItemsInfo.firstOrNull()
+                first?.index ?: startIdx
+            }
+        }
 
         Box(
             Modifier.fillMaxSize()
                 .background(Color.Black)
-                .clickable(enabled = type == "image") { previewTarget = null }
         ) {
             // 关闭按钮
             IconButton(
@@ -652,76 +665,35 @@ private fun DoubanDetailScreen(
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "关闭", tint = Color.White, modifier = Modifier.size(28.dp))
             }
-
-            when (type) {
-                "image" -> {
-                    val idx = payload.toIntOrNull() ?: return@AnimatedVisibility
-                    val url = stills.getOrNull(idx) ?: return@AnimatedVisibility
-                    AsyncImage(
-                        model = url, contentDescription = "剧照",
-                        modifier = Modifier.fillMaxSize().padding(24.dp),
-                        contentScale = ContentScale.Fit
-                    )
-                    if (idx > 0) {
-                        IconButton(
-                            onClick = { previewTarget = "image:${idx - 1}" },
-                            modifier = Modifier.align(Alignment.CenterStart)
-                        ) { Icon(Icons.Default.ChevronLeft, "上一张", tint = Color.White, modifier = Modifier.size(42.dp)) }
-                    }
-                    if (idx < stills.size - 1) {
-                        IconButton(
-                            onClick = { previewTarget = "image:${idx + 1}" },
-                            modifier = Modifier.align(Alignment.CenterEnd)
-                        ) { Icon(Icons.Default.ChevronRight, "下一张", tint = Color.White, modifier = Modifier.size(42.dp)) }
-                    }
-                    Text(
-                        "${idx + 1} / ${stills.size}",
-                        color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp,
-                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp)
-                    )
-                }
-                "video" -> {
-                    val videoUrl = payload
-                    val videoUri = Uri.parse(videoUrl)
-                    val context = LocalContext.current
-
-                    // 判断 URL 类型：真视频文件 → VideoView；否则直接跳外部浏览器
-                    val lower = videoUrl.lowercase()
-                    // 黑名单：html 网页、豆瓣重定向包装 → 直接 Intent
-                    val isNotMedia = lower.contains(".html") || lower.contains(".htm") ||
-                            lower.contains(".php") || lower.contains(".asp") ||
-                            lower.contains("douban.com/link2")
-                    // 白名单：媒体扩展名
-                    val isRealVideo = !isNotMedia && listOf(".mp4", ".m3u8", ".webm", ".mkv", ".mov", ".m4v", ".3gp", ".flv", ".avi", ".ts").any { lower.contains(it) } ||
-                            (!isNotMedia && (lower.contains("youku.com/v_show/id_") || lower.contains("youtube.com/watch?v=") || lower.contains("youtu.be/")))
-
-                    if (!isRealVideo) {
-                        // 直接跳外部浏览器（不经过 VideoView，避免崩溃）
-                        LaunchedEffect(Unit) {
-                            runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, videoUri)) }
-                            previewTarget = null
-                        }
-                        Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                            CircularProgressIndicator(color = Color.White)
-                        }
-                    } else {
-                        AndroidView(
-                            factory = { ctx ->
-                                VideoView(ctx).apply {
-                                    setVideoURI(videoUri)
-                                    setOnPreparedListener { start() }
-                                    setOnErrorListener { _, what, extra ->
-                                        android.util.Log.e("VideoPreview", "error what=$what extra=$extra")
-                                        runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, videoUri)) }
-                                        true
-                                    }
-                                }
-                            },
-                            modifier = Modifier.fillMaxSize()
+            // 横向滚动大图
+            LazyRow(
+                state = listState,
+                modifier = Modifier.fillMaxSize().padding(vertical = 48.dp),
+                contentPadding = PaddingValues(horizontal = 24.dp),
+                horizontalArrangement = Arrangement.spacedBy(16.dp),
+                verticalAlignment = Alignment.CenterVertically
+            ) {
+                itemsIndexed(stills) { i, url ->
+                    Box(
+                        modifier = Modifier.fillParentMaxHeight(),
+                        contentAlignment = Alignment.Center
+                    ) {
+                        AsyncImage(
+                            model = url, contentDescription = "剧照 ${i + 1}",
+                            modifier = Modifier
+                                .fillMaxHeight()
+                                .clickable { previewTarget = null },
+                            contentScale = ContentScale.Fit
                         )
                     }
                 }
             }
+            // 页码
+            Text(
+                "${currentIdx + 1} / ${stills.size}",
+                color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp,
+                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp)
+            )
         }
     }
 
