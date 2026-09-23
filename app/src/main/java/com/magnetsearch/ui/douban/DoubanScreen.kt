@@ -490,44 +490,33 @@ private fun DoubanDetailScreen(
                 }
             }
 
-            // === 剧照网格（点击触发全屏预览） ===
+            // === 剧照横向滚动（跟演职员同款） ===
             if (stills.isNotEmpty()) {
                 item {
                     Text("剧照", fontWeight = FontWeight.Bold, fontSize = 14.sp,
                         modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
                 }
-                // 每行 3 张，保留全局索引
-                val rows = stills.withIndex().chunked(3)
-                rows.forEach { rowWithIdx ->
-                    item {
-                        Row(
-                            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
-                            horizontalArrangement = Arrangement.spacedBy(6.dp)
-                        ) {
-                            rowWithIdx.forEachIndexed { rowIdx, iv ->
-                                Box(
-                                    modifier = Modifier.weight(1f)
-                                        .height(100.dp)
-                                        .clip(RoundedCornerShape(6.dp))
-                                        .background(Divider)
-                                        .clickable { previewTarget = iv.index.toString() }
-                                ) {
-                                    AsyncImage(
-                                        model = iv.value, contentDescription = "剧照",
-                                        modifier = Modifier.fillMaxSize(),
-                                        contentScale = ContentScale.Crop,
-                                        placeholder = painterResource(id = android.R.drawable.ic_menu_report_image),
-                                        error = painterResource(id = android.R.drawable.ic_menu_report_image)
-                                    )
-                                }
-                                if (rowIdx == rowWithIdx.size - 1 && rowWithIdx.size < 3) {
-                                    repeat(3 - rowWithIdx.size) { Box(Modifier.weight(1f)) }
-                                }
+                item {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        itemsIndexed(stills) { idx, url ->
+                            Box(
+                                modifier = Modifier.width(140.dp).height(90.dp)
+                                    .clip(RoundedCornerShape(8.dp))
+                                    .background(Divider)
+                                    .clickable { previewTarget = "image:$idx" }
+                            ) {
+                                AsyncImage(
+                                    model = url, contentDescription = "剧照",
+                                    modifier = Modifier.fillMaxSize(),
+                                    contentScale = ContentScale.Crop,
+                                    placeholder = painterResource(id = android.R.drawable.ic_menu_report_image),
+                                    error = painterResource(id = android.R.drawable.ic_menu_report_image)
+                                )
                             }
                         }
                     }
+                    HorizontalDivider(color = Divider, thickness = 0.5.dp, modifier = Modifier.padding(top = 8.dp))
                 }
-                item { HorizontalDivider(color = Divider, thickness = 0.5.dp, modifier = Modifier.padding(top = 6.dp)) }
             }
 
             // === 完整信息表 ===
@@ -636,64 +625,54 @@ private fun DoubanDetailScreen(
         }  // LazyColumn
     }  // Scaffold
 
-    // === 剧照全屏预览 overlay（LazyRow 横向滚动） ===
+    // === 全屏剧照预览 overlay（单张 + 左右按钮） ===
     AnimatedVisibility(
         visible = previewTarget != null,
         enter = fadeIn(), exit = fadeOut()
     ) {
-        val startIdx = previewTarget?.toIntOrNull() ?: 0
-        val listState = rememberLazyListState()
-        LaunchedEffect(startIdx) {
-            listState.scrollToItem(startIdx)
-        }
-        val currentIdx by remember {
-            derivedStateOf {
-                val layoutInfo = listState.layoutInfo
-                val first = layoutInfo.visibleItemsInfo.firstOrNull()
-                first?.index ?: startIdx
-            }
-        }
+        val target = previewTarget ?: return@AnimatedVisibility
+        val (type, payload) = target.split(":", limit = 2)
 
         Box(
             Modifier.fillMaxSize()
-                .background(Color.Black)
+                .background(Color.Black.copy(alpha = 0.95f))
+                .clickable(enabled = type == "image") { previewTarget = null }
         ) {
-            // 关闭按钮
             IconButton(
                 onClick = { previewTarget = null },
                 modifier = Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 8.dp)
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "关闭", tint = Color.White, modifier = Modifier.size(28.dp))
             }
-            // 横向滚动大图
-            LazyRow(
-                state = listState,
-                modifier = Modifier.fillMaxSize().padding(vertical = 48.dp),
-                contentPadding = PaddingValues(horizontal = 24.dp),
-                horizontalArrangement = Arrangement.spacedBy(16.dp),
-                verticalAlignment = Alignment.CenterVertically
-            ) {
-                itemsIndexed(stills) { i, url ->
-                    Box(
-                        modifier = Modifier.fillParentMaxHeight(),
-                        contentAlignment = Alignment.Center
-                    ) {
-                        AsyncImage(
-                            model = url, contentDescription = "剧照 ${i + 1}",
-                            modifier = Modifier
-                                .fillMaxHeight()
-                                .clickable { previewTarget = null },
-                            contentScale = ContentScale.Fit
-                        )
+
+            when (type) {
+                "image" -> {
+                    val idx = payload.toIntOrNull() ?: return@AnimatedVisibility
+                    val url = stills.getOrNull(idx) ?: return@AnimatedVisibility
+                    AsyncImage(
+                        model = url, contentDescription = "剧照",
+                        modifier = Modifier.fillMaxSize().padding(24.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                    if (idx > 0) {
+                        IconButton(
+                            onClick = { previewTarget = "image:${idx - 1}" },
+                            modifier = Modifier.align(Alignment.CenterStart)
+                        ) { Icon(Icons.Default.ChevronLeft, "上一张", tint = Color.White, modifier = Modifier.size(42.dp)) }
                     }
+                    if (idx < stills.size - 1) {
+                        IconButton(
+                            onClick = { previewTarget = "image:${idx + 1}" },
+                            modifier = Modifier.align(Alignment.CenterEnd)
+                        ) { Icon(Icons.Default.ChevronRight, "下一张", tint = Color.White, modifier = Modifier.size(42.dp)) }
+                    }
+                    Text(
+                        "${idx + 1} / ${stills.size}",
+                        color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp,
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp)
+                    )
                 }
             }
-            // 页码
-            Text(
-                "${currentIdx + 1} / ${stills.size}",
-                color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 20.dp)
-            )
         }
     }
 
