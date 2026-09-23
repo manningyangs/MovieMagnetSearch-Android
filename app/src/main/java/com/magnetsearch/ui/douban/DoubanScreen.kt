@@ -479,11 +479,7 @@ private fun DoubanDetailScreen(
                 item {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
                         items(trailers) { trailer ->
-                            TrailerCard(trailer) {
-                                runCatching {
-                                    context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(trailer.videoUrl)))
-                                }
-                            }
+                            TrailerCard(trailer) { previewTarget = "video:${trailer.videoUrl}" }
                         }
                     }
                     HorizontalDivider(color = Divider, thickness = 0.5.dp, modifier = Modifier.padding(top = 8.dp))
@@ -670,6 +666,28 @@ private fun DoubanDetailScreen(
                         "${idx + 1} / ${stills.size}",
                         color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp,
                         modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp)
+                    )
+                }
+                "video" -> {
+                    val videoUrl = payload
+                    AndroidView(
+                        factory = { ctx ->
+                            android.webkit.WebView(ctx).apply {
+                                settings.javaScriptEnabled = true
+                                settings.domStorageEnabled = true
+                                settings.mediaPlaybackRequiresUserGesture = false
+                                settings.loadWithOverviewMode = true
+                                settings.useWideViewPort = true
+                                settings.userAgentString = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
+                                webViewClient = object : android.webkit.WebViewClient() {
+                                    override fun shouldOverrideUrlLoading(view: android.webkit.WebView?, request: android.webkit.WebResourceRequest?) = false
+                                }
+                            }
+                        },
+                        update = { webView ->
+                            webView.loadUrl(videoUrl)
+                        },
+                        modifier = Modifier.fillMaxSize().padding(top = 44.dp)
                     )
                 }
             }
