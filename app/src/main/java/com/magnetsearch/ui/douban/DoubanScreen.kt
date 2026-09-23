@@ -10,14 +10,20 @@ import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyColumn
+import androidx.compose.foundation.lazy.LazyRow
 import androidx.compose.foundation.lazy.items
+import androidx.compose.foundation.lazy.itemsIndexed
 import androidx.compose.foundation.lazy.rememberLazyListState
+import androidx.compose.foundation.shape.CircleShape
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.ChevronLeft
 import androidx.compose.material.icons.filled.ChevronRight
 import androidx.compose.material.icons.filled.Home
+import androidx.compose.material.icons.filled.KeyboardArrowDown
+import androidx.compose.material.icons.filled.KeyboardArrowUp
+import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -25,6 +31,7 @@ import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
+import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -34,9 +41,12 @@ import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.magnetsearch.data.model.CastMember
 import com.magnetsearch.data.model.DoubanComment
 import com.magnetsearch.data.model.DoubanDetail
 import com.magnetsearch.data.model.DoubanMovie
+import com.magnetsearch.data.model.DoubanReview
+import com.magnetsearch.data.model.Trailer
 import com.magnetsearch.ui.theme.*
 
 @OptIn(ExperimentalMaterial3Api::class)
@@ -359,7 +369,7 @@ private fun DoubanDetailScreen(
                             modifier = Modifier.width(110.dp).height(155.dp)
                                 .clip(RoundedCornerShape(8.dp))
                                 .background(Divider),
-                            contentScale = androidx.compose.ui.layout.ContentScale.Crop,
+                            contentScale = ContentScale.Crop,
                             placeholder = painterResource(id = android.R.drawable.ic_menu_report_image),
                             error = painterResource(id = android.R.drawable.ic_menu_report_image)
                         )
@@ -403,8 +413,7 @@ private fun DoubanDetailScreen(
                                 color = Primary,
                                 fontSize = 12.sp,
                                 modifier = Modifier.clickable {
-                                    val url = "https://www.imdb.com/title/$imdb/"
-                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                    val intent = Intent(Intent.ACTION_VIEW, Uri.parse("https://www.imdb.com/title/$imdb/"))
                                     intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
                                     context.startActivity(intent)
                                 }
@@ -430,6 +439,89 @@ private fun DoubanDetailScreen(
                         HorizontalDivider(color = Divider, thickness = 0.5.dp)
                     }
                 }
+            }
+
+            // === 演职员横滑头像 Row ===
+            val castMembers = d?.castMembers ?: emptyList()
+            if (castMembers.isNotEmpty()) {
+                item {
+                    Text("演职员", fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                        modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
+                }
+                item {
+                    LazyRow(
+                        horizontalArrangement = Arrangement.spacedBy(10.dp),
+                        contentPadding = PaddingValues(vertical = 4.dp)
+                    ) {
+                        items(castMembers) { member -> CastAvatarItem(member) }
+                    }
+                    HorizontalDivider(color = Divider, thickness = 0.5.dp, modifier = Modifier.padding(top = 8.dp))
+                }
+            }
+
+            // === 预告片 ===
+            val trailers = d?.trailers ?: emptyList()
+            if (trailers.isNotEmpty()) {
+                item {
+                    Text("预告片", fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                        modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
+                }
+                item {
+                    LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
+                        items(trailers) { trailer -> TrailerCard(trailer, context) }
+                    }
+                    HorizontalDivider(color = Divider, thickness = 0.5.dp, modifier = Modifier.padding(top = 8.dp))
+                }
+            }
+
+            // === 剧照网格 ===
+            val stills = d?.stills ?: emptyList()
+            if (stills.isNotEmpty()) {
+                item {
+                    Text("剧照", fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                        modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
+                }
+                // 每行 3 张
+                val rows = stills.chunked(3)
+                rows.forEach { rowStills ->
+                    item {
+                        Row(
+                            modifier = Modifier.fillMaxWidth().padding(vertical = 3.dp),
+                            horizontalArrangement = Arrangement.spacedBy(6.dp)
+                        ) {
+                            rowStills.forEachIndexed { idx, url ->
+                                val isLast = idx == rowStills.size - 1
+                                val weight = if (isLast && rowStills.size == 1) 1f else 1f
+                                Box(
+                                    modifier = Modifier.weight(weight)
+                                        .height(100.dp)
+                                        .clip(RoundedCornerShape(6.dp))
+                                        .background(Divider)
+                                        .clickable {
+                                            val intent = Intent(Intent.ACTION_VIEW, Uri.parse(url))
+                                            intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+                                            context.startActivity(intent)
+                                        }
+                                ) {
+                                    AsyncImage(
+                                        model = url, contentDescription = "剧照",
+                                        modifier = Modifier.fillMaxSize(),
+                                        contentScale = ContentScale.Crop,
+                                        placeholder = painterResource(id = android.R.drawable.ic_menu_report_image),
+                                        error = painterResource(id = android.R.drawable.ic_menu_report_image)
+                                    )
+                                }
+                                // 如果是最后一张且当前行不足 3 张，补空白占位让其他图均匀分布
+                                if (isLast && rowStills.size < 3) {
+                                    repeat(3 - rowStills.size) {
+                                        Box(Modifier.weight(1f))
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+                item { HorizontalDivider(color = Divider, thickness = 0.5.dp, modifier = Modifier.padding(top = 6.dp)) }
             }
 
             // === 完整信息表 ===
@@ -480,14 +572,36 @@ private fun DoubanDetailScreen(
             }
             detailError?.let { item { Text("加载失败: $it", color = Color.Red, modifier = Modifier.padding(12.dp)) } }
 
-            // === 剧情简介 ===
+            // === 剧情简介（带展开/收起） ===
             val fullStory = d?.fullSummary?.takeIf { it.isNotBlank() } ?: movie.summary
             if (fullStory.isNotBlank()) {
                 item {
+                    var expanded by remember { mutableStateOf(false) }
                     Text("剧情简介", fontWeight = FontWeight.Bold, fontSize = 15.sp,
                         modifier = Modifier.padding(top = 4.dp, bottom = 6.dp))
-                    Text(fullStory, fontSize = 13.sp, color = TextPrimary.copy(alpha = 0.85f), lineHeight = 20.sp)
-                    HorizontalDivider(color = Divider, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 12.dp))
+                    Text(
+                        text = fullStory,
+                        fontSize = 13.sp,
+                        color = TextPrimary.copy(alpha = 0.85f),
+                        lineHeight = 20.sp,
+                        maxLines = if (expanded) Int.MAX_VALUE else 4,
+                        overflow = TextOverflow.Ellipsis
+                    )
+                    Row(
+                        modifier = Modifier.fillMaxWidth().padding(top = 2.dp),
+                        horizontalArrangement = Arrangement.End,
+                        verticalAlignment = Alignment.CenterVertically
+                    ) {
+                        TextButton(onClick = { expanded = !expanded }) {
+                            Text(if (expanded) "收起" else "展开全文", fontSize = 13.sp)
+                            Icon(
+                                if (expanded) Icons.Default.KeyboardArrowUp else Icons.Default.KeyboardArrowDown,
+                                null,
+                                modifier = Modifier.size(18.dp)
+                            )
+                        }
+                    }
+                    HorizontalDivider(color = Divider, thickness = 0.5.dp, modifier = Modifier.padding(vertical = 4.dp))
                 }
             }
 
@@ -499,9 +613,199 @@ private fun DoubanDetailScreen(
                         modifier = Modifier.padding(bottom = 8.dp))
                 }
                 items(comments) { c -> CommentItem(c); Spacer(Modifier.height(4.dp)) }
-                item { Spacer(Modifier.height(24.dp)) }
-            } else if (!detailLoading) {
-                item { Text("暂无短评", color = TextTertiary, fontSize = 12.sp, modifier = Modifier.padding(top = 8.dp)) }
+            }
+
+            // === 影评（长评） ===
+            val reviews = d?.reviews ?: emptyList()
+            if (reviews.isNotEmpty()) {
+                item {
+                    Spacer(Modifier.height(16.dp))
+                    Text("影评", fontWeight = FontWeight.Bold, fontSize = 15.sp,
+                        modifier = Modifier.padding(bottom = 8.dp))
+                }
+                items(reviews) { r -> ReviewCard(r, context); Spacer(Modifier.height(8.dp)) }
+            }
+
+            item { Spacer(Modifier.height(24.dp)) }
+        }
+    }
+}
+
+// ============================================================
+// 演职员头像横滑项
+// ============================================================
+@Composable
+private fun CastAvatarItem(member: CastMember) {
+    Column(
+        horizontalAlignment = Alignment.CenterHorizontally,
+        modifier = Modifier.width(72.dp)
+    ) {
+        Box(
+            modifier = Modifier.size(64.dp)
+                .clip(CircleShape)
+                .background(Divider),
+            contentAlignment = Alignment.Center
+        ) {
+            if (member.avatarUrl.isNotBlank()) {
+                AsyncImage(
+                    model = member.avatarUrl, contentDescription = member.name,
+                    modifier = Modifier.fillMaxSize(),
+                    contentScale = ContentScale.Crop,
+                    placeholder = painterResource(id = android.R.drawable.ic_menu_report_image),
+                    error = painterResource(id = android.R.drawable.ic_menu_report_image)
+                )
+            } else {
+                Text(member.name.take(1), fontSize = 22.sp, color = TextTertiary, fontWeight = FontWeight.Bold)
+            }
+        }
+        Spacer(Modifier.height(4.dp))
+        Text(
+            member.name, fontSize = 12.sp, maxLines = 1,
+            overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
+        )
+        if (member.role.isNotBlank()) {
+            Text(
+                member.role, fontSize = 10.sp, color = TextTertiary,
+                maxLines = 1, overflow = TextOverflow.Ellipsis, textAlign = TextAlign.Center
+            )
+        }
+    }
+}
+
+// ============================================================
+// 预告片卡片
+// ============================================================
+@Composable
+private fun TrailerCard(trailer: Trailer, context: android.content.Context) {
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(trailer.videoUrl))
+    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+    Box(
+        modifier = Modifier.width(160.dp).height(90.dp)
+            .clip(RoundedCornerShape(8.dp))
+            .background(Color.Black)
+            .clickable { context.startActivity(intent) }
+    ) {
+        if (trailer.coverUrl.isNotBlank()) {
+            AsyncImage(
+                model = trailer.coverUrl, contentDescription = trailer.title.ifBlank { "预告片" },
+                modifier = Modifier.fillMaxSize(),
+                contentScale = ContentScale.Crop,
+                placeholder = painterResource(id = android.R.drawable.ic_menu_report_image),
+                error = painterResource(id = android.R.drawable.ic_menu_report_image)
+            )
+        }
+        // 半透明遮罩 + 播放图标
+        Box(
+            modifier = Modifier.fillMaxSize().background(Color.Black.copy(alpha = 0.35f)),
+            contentAlignment = Alignment.Center
+        ) {
+            Icon(
+                Icons.Default.PlayArrow, "播放",
+                tint = Color.White,
+                modifier = Modifier.size(44.dp).clip(CircleShape).background(Color.White.copy(alpha = 0.3f))
+            )
+        }
+        if (trailer.title.isNotBlank()) {
+            Surface(
+                color = Color.Black.copy(alpha = 0.6f),
+                modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()
+            ) {
+                Text(
+                    trailer.title, fontSize = 11.sp, color = Color.White,
+                    modifier = Modifier.padding(horizontal = 8.dp, vertical = 3.dp),
+                    maxLines = 1, overflow = TextOverflow.Ellipsis
+                )
+            }
+        }
+    }
+}
+
+// ============================================================
+// 影评卡片（长评）
+// ============================================================
+@Composable
+private fun ReviewCard(r: DoubanReview, context: android.content.Context) {
+    var expanded by remember { mutableStateOf(false) }
+    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(r.doubanUrl))
+    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+
+    Card(
+        modifier = Modifier.fillMaxWidth(),
+        shape = RoundedCornerShape(10.dp),
+        colors = CardDefaults.cardColors(containerColor = Color(0xFFF3F4F6)),
+        elevation = CardDefaults.cardElevation(defaultElevation = 0.dp)
+    ) {
+        Column(modifier = Modifier.padding(12.dp)) {
+            // 头部：头像 + 作者 + 评分 + 日期
+            Row(verticalAlignment = Alignment.CenterVertically) {
+                if (r.avatarUrl.isNotBlank()) {
+                    AsyncImage(
+                        model = r.avatarUrl, contentDescription = r.author,
+                        modifier = Modifier.size(28.dp).clip(CircleShape).background(Divider),
+                        contentScale = ContentScale.Crop,
+                        placeholder = painterResource(id = android.R.drawable.ic_menu_report_image),
+                        error = painterResource(id = android.R.drawable.ic_menu_report_image)
+                    )
+                } else {
+                    Box(
+                        Modifier.size(28.dp).clip(CircleShape).background(Divider),
+                        contentAlignment = Alignment.Center
+                    ) { Text(r.author.take(1), fontSize = 12.sp, color = TextTertiary, fontWeight = FontWeight.Bold) }
+                }
+                Spacer(Modifier.width(8.dp))
+                Text(r.author, fontWeight = FontWeight.Medium, fontSize = 13.sp)
+                if (r.rating > 0f) {
+                    Spacer(Modifier.width(6.dp))
+                    Text("★ ${"%.1f".format(r.rating)}", color = Accent, fontSize = 11.sp)
+                }
+                if (r.date.isNotBlank()) {
+                    Spacer(Modifier.width(6.dp))
+                    Text(r.date, color = TextSecondary, fontSize = 11.sp)
+                }
+            }
+
+            // 标题
+            if (r.title.isNotBlank()) {
+                Spacer(Modifier.height(6.dp))
+                Text(r.title, fontWeight = FontWeight.Bold, fontSize = 14.sp)
+            }
+
+            // 正文（可展开）
+            if (r.content.isNotBlank()) {
+                Spacer(Modifier.height(4.dp))
+                val lineCount = r.content.lineSequence().count()
+                Text(
+                    text = r.content, fontSize = 13.sp, color = TextPrimary,
+                    lineHeight = 20.sp,
+                    maxLines = if (expanded) Int.MAX_VALUE else 6,
+                    overflow = TextOverflow.Ellipsis
+                )
+                if (lineCount > 6) {
+                    Row(
+                        modifier = Modifier.fillMaxWidth(),
+                        horizontalArrangement = Arrangement.End
+                    ) {
+                        TextButton(
+                            onClick = { expanded = !expanded },
+                            contentPadding = PaddingValues(0.dp)
+                        ) {
+                            Text(if (expanded) "收起" else "展开全文", fontSize = 12.sp)
+                        }
+                    }
+                }
+            }
+
+            // 查看原帖链接
+            if (r.doubanUrl.isNotBlank()) {
+                Row(
+                    modifier = Modifier.fillMaxWidth().padding(top = 4.dp),
+                    horizontalArrangement = Arrangement.End
+                ) {
+                    TextButton(
+                        onClick = { context.startActivity(intent) },
+                        contentPadding = PaddingValues(4.dp)
+                    ) { Text("查看原帖 →", fontSize = 12.sp) }
+                }
             }
         }
     }

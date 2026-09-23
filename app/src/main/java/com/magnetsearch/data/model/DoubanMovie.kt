@@ -18,6 +18,32 @@ data class DoubanMovie(
 )
 
 @Serializable
+data class CastMember(
+    val name: String = "",
+    val role: String = "",        // "导演" / "主演" / "编剧" / ""
+    val avatarUrl: String = "",
+    val doubanUrl: String = ""    // 跳到豆瓣演员页
+)
+
+@Serializable
+data class Trailer(
+    val title: String = "",
+    val videoUrl: String = "",    // 豆瓣视频 MP4 或 youku URL
+    val coverUrl: String = ""
+)
+
+@Serializable
+data class DoubanReview(
+    val author: String = "",
+    val avatarUrl: String = "",
+    val rating: Float = 0f,       // 0~5, 0 表示未打分
+    val title: String = "",
+    val content: String = "",
+    val date: String = "",
+    val doubanUrl: String = ""
+)
+
+@Serializable
 data class DoubanDetail(
     var doubanId: String = "",
     var title: String = "",
@@ -40,7 +66,12 @@ data class DoubanDetail(
     var genres: List<String> = emptyList(),
     var countries: List<String> = emptyList(),
     var duration: String = "",
-    var comments: List<DoubanComment> = emptyList()
+    var comments: List<DoubanComment> = emptyList(),
+    // ===== 新增字段 =====
+    var castMembers: List<CastMember> = emptyList(),
+    var trailers: List<Trailer> = emptyList(),
+    var stills: List<String> = emptyList(),
+    var reviews: List<DoubanReview> = emptyList()
 )
 
 @Serializable
