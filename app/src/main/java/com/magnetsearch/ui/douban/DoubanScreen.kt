@@ -2,6 +2,7 @@ package com.magnetsearch.ui.douban
 
 import android.content.Intent
 import android.net.Uri
+import android.widget.VideoView
 import androidx.activity.compose.BackHandler
 import androidx.compose.animation.AnimatedVisibility
 import androidx.compose.animation.fadeIn
@@ -33,6 +34,7 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
 import androidx.compose.ui.text.style.TextAlign
@@ -339,12 +341,12 @@ private fun DoubanDetailScreen(
     val year = d?.year?.takeIf { it.isNotBlank() } ?: movie.year
     val rating = d?.rating?.takeIf { it > 0f } ?: movie.rating
 
-    // === 全屏剧照预览 state ===
-    var expandedStillIndex by remember { mutableStateOf<Int?>(null) }
-    val stills = d?.stills ?: emptyList()
+    // === 统一预览：大图 or 视频 ===
+    // null=关闭, "image:$index"=剧照大图, "video:$url"=预告片播放
+    var previewTarget by remember { mutableStateOf<String?>(null) }
+    BackHandler(enabled = previewTarget != null) { previewTarget = null }
 
-    // 全屏预览时，返回键关闭预览而非退出详情页
-    BackHandler(enabled = expandedStillIndex != null) { expandedStillIndex = null }
+    val stills = d?.stills ?: emptyList()
 
     Box(Modifier.fillMaxSize()) {
     Scaffold(
@@ -476,7 +478,9 @@ private fun DoubanDetailScreen(
                 }
                 item {
                     LazyRow(horizontalArrangement = Arrangement.spacedBy(10.dp)) {
-                        items(trailers) { trailer -> TrailerCard(trailer, context) }
+                        items(trailers) { trailer ->
+                            TrailerCard(trailer) { previewTarget = "video:${trailer.videoUrl}" }
+                        }
                     }
                     HorizontalDivider(color = Divider, thickness = 0.5.dp, modifier = Modifier.padding(top = 8.dp))
                 }
@@ -502,7 +506,7 @@ private fun DoubanDetailScreen(
                                         .height(100.dp)
                                         .clip(RoundedCornerShape(6.dp))
                                         .background(Divider)
-                                        .clickable { expandedStillIndex = iv.index }
+                                        .clickable { previewTarget = "image:${iv.index}" }
                                 ) {
                                     AsyncImage(
                                         model = iv.value, contentDescription = "剧照",
@@ -628,46 +632,75 @@ private fun DoubanDetailScreen(
         }  // LazyColumn
     }  // Scaffold
 
-    // === 全屏剧照预览 overlay（淡入淡出） ===
+    // === 统一预览 overlay：剧照大图 + 预告片视频 ===
     AnimatedVisibility(
-        visible = expandedStillIndex != null,
+        visible = previewTarget != null,
         enter = fadeIn(), exit = fadeOut()
     ) {
-        val idx = expandedStillIndex ?: return@AnimatedVisibility
-        val url = stills.getOrNull(idx) ?: return@AnimatedVisibility
+        val target = previewTarget ?: return@AnimatedVisibility
+        val (type, payload) = target.split(":", limit = 2)
+
         Box(
             Modifier.fillMaxSize()
-                .background(Color.Black.copy(alpha = 0.95f))
-                .clickable { expandedStillIndex = null }
+                .background(Color.Black)
+                .clickable(enabled = type == "image") { previewTarget = null }
         ) {
-            AsyncImage(
-                model = url, contentDescription = "剧照",
-                modifier = Modifier.fillMaxSize().padding(24.dp),
-                contentScale = ContentScale.Fit
-            )
+            // 关闭按钮
             IconButton(
-                onClick = { expandedStillIndex = null },
+                onClick = { previewTarget = null },
                 modifier = Modifier.align(Alignment.TopEnd).padding(top = 12.dp, end = 8.dp)
             ) {
                 Icon(Icons.AutoMirrored.Filled.ArrowBack, "关闭", tint = Color.White, modifier = Modifier.size(28.dp))
             }
-            if (idx > 0) {
-                IconButton(
-                    onClick = { expandedStillIndex = idx - 1 },
-                    modifier = Modifier.align(Alignment.CenterStart)
-                ) { Icon(Icons.Default.ChevronLeft, "上一张", tint = Color.White, modifier = Modifier.size(42.dp)) }
+
+            when (type) {
+                "image" -> {
+                    val idx = payload.toIntOrNull() ?: return@AnimatedVisibility
+                    val url = stills.getOrNull(idx) ?: return@AnimatedVisibility
+                    AsyncImage(
+                        model = url, contentDescription = "剧照",
+                        modifier = Modifier.fillMaxSize().padding(24.dp),
+                        contentScale = ContentScale.Fit
+                    )
+                    if (idx > 0) {
+                        IconButton(
+                            onClick = { previewTarget = "image:${idx - 1}" },
+                            modifier = Modifier.align(Alignment.CenterStart)
+                        ) { Icon(Icons.Default.ChevronLeft, "上一张", tint = Color.White, modifier = Modifier.size(42.dp)) }
+                    }
+                    if (idx < stills.size - 1) {
+                        IconButton(
+                            onClick = { previewTarget = "image:${idx + 1}" },
+                            modifier = Modifier.align(Alignment.CenterEnd)
+                        ) { Icon(Icons.Default.ChevronRight, "下一张", tint = Color.White, modifier = Modifier.size(42.dp)) }
+                    }
+                    Text(
+                        "${idx + 1} / ${stills.size}",
+                        color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp,
+                        modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp)
+                    )
+                }
+                "video" -> {
+                    val videoUrl = payload
+                    val videoUri = Uri.parse(videoUrl)
+                    val context = LocalContext.current
+                    AndroidView(
+                        factory = { ctx ->
+                            VideoView(ctx).apply {
+                                setVideoURI(videoUri)
+                                setOnPreparedListener { start() }
+                                setOnErrorListener { _, what, extra ->
+                                    android.util.Log.e("VideoPreview", "error what=$what extra=$extra")
+                                    // 视频加载失败 → 外部浏览器兜底
+                                    runCatching { context.startActivity(Intent(Intent.ACTION_VIEW, videoUri)) }
+                                    true
+                                }
+                            }
+                        },
+                        modifier = Modifier.fillMaxSize()
+                    )
+                }
             }
-            if (idx < stills.size - 1) {
-                IconButton(
-                    onClick = { expandedStillIndex = idx + 1 },
-                    modifier = Modifier.align(Alignment.CenterEnd)
-                ) { Icon(Icons.Default.ChevronRight, "下一张", tint = Color.White, modifier = Modifier.size(42.dp)) }
-            }
-            Text(
-                "${idx + 1} / ${stills.size}",
-                color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp,
-                modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp)
-            )
         }
     }
 
@@ -719,14 +752,12 @@ private fun CastAvatarItem(member: CastMember) {
 // 预告片卡片
 // ============================================================
 @Composable
-private fun TrailerCard(trailer: Trailer, context: android.content.Context) {
-    val intent = Intent(Intent.ACTION_VIEW, Uri.parse(trailer.videoUrl))
-    intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
+private fun TrailerCard(trailer: Trailer, onClick: () -> Unit) {
     Box(
         modifier = Modifier.width(160.dp).height(90.dp)
             .clip(RoundedCornerShape(8.dp))
             .background(Color.Black)
-            .clickable { context.startActivity(intent) }
+            .clickable { onClick() }
     ) {
         if (trailer.coverUrl.isNotBlank()) {
             AsyncImage(

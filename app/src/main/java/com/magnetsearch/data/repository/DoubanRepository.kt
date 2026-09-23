@@ -232,58 +232,85 @@ class DoubanRepository {
     }
 
     /** 抓取演职员头像：独立页面 /subject/{id}/celebrities。
-     *  subject 详情页本身**不渲染头像**，只有 personage 名字链接。
+     *  **核心策略**：不猜 CSS selector，直接扫所有 `personage` 链接，往上爬一层找同名 img。
      *  内置 PoW 兜底：即使 getDetail 已解 PoW，这里再碰一次也能自救。 */
     private fun fetchCelebrities(doubanId: String): List<CastMember> {
         val pageUrl = "https://movie.douban.com/subject/$doubanId/celebrities"
         var html = fetchHtml(pageUrl) ?: return emptyList()
-        // PoW 兜底
         if (html.contains("载入中") && html.contains("name=\"cha\"")) {
             android.util.Log.d("DoubanRepo", "fetchCelebrities got PoW, solving...")
             html = solveDoubanPow(html, pageUrl) ?: return emptyList()
         }
-        if (!html.contains("celebrit")) {
-            android.util.Log.d("DoubanRepo", "fetchCelebrities: not celebrities page (body head: ${html.take(150)})")
+        if (!html.contains("personage")) {
+            android.util.Log.d("DoubanRepo", "fetchCelebrities: no personage links (body head: ${html.take(200)})")
             return emptyList()
         }
         val doc = Jsoup.parse(html)
         val out = mutableListOf<CastMember>()
+        val seenPersonages = mutableSetOf<String>()  // 去重
 
-        // 多 selector 兜底：**从最具体的开始匹配**，"li" 太宽泛放最后
-        val selectors = listOf(
-            "li.celebrity",                        // 旧版：li class=celebrity
-            ".celebrities li",                     // 通用
-            "div[class*='celebrit'] li",           // 通用
-            "li",                                  // 最后兜底：全页 li
-        )
-        val nodes = selectors.firstNotNullOfOrNull { sel ->
-            val ns = doc.select(sel)
-            // 至少 2 条才算匹配到了，而且**第一条必须有 personage 链接或 img**
-            if (ns.size >= 2 && ns.firstOrNull()?.selectFirst("a[href*='personage'], img") != null) ns else null
-        } ?: return emptyList()
+        // === 策略 1：扫所有 personage 链接 ===
+        val personageLinks = doc.select("a[href*='/personage/']")
+        android.util.Log.d("DoubanRepo", "fetchCelebrities personage links=${personageLinks.size}")
 
-        android.util.Log.d("DoubanRepo", "fetchCelebrities matched ${nodes.size} nodes")
-        nodes.forEach { node ->
-            val aLink = node.selectFirst("a[href*='personage']") ?: node.selectFirst("a")
-            val href = aLink?.attr("href")?.let { if (it.startsWith("/")) "https://movie.douban.com$it" else it } ?: ""
-            val img = node.selectFirst("img")
-            // 头像：data-src 优先，其次 src。**空就跳过，不用豆瓣那个返回 0 字节的 fallback**
-            val avatar = img?.attr("data-src")?.ifBlank { img.attr("src") }?.trim().orEmpty()
-            // 名字：优先 .name > img alt > a title > a text
-            val name = node.selectFirst(".name, .celebrity-name, .actor-name")?.text()?.trim()
-                ?: img?.attr("alt")?.trim()
-                ?: aLink?.attr("title")?.trim()
-                ?: aLink?.text()?.trim()
-                ?: ""
-            // 角色
-            val role = node.selectFirst(".role, .character, .celebrity-role, span[class*='char'], span[class*='role']")
-                ?.text()?.trim()
-                ?: ""
-            // 必须名字非空 + 头像非空才收进来（跳过导航/分页等无关 li）
-            if (name.isNotBlank() && avatar.isNotBlank()) {
+        // === DEBUG：打印前 3 个 personage 链接的 HTML 结构 ===
+        personageLinks.take(3).forEachIndexed { i, a ->
+            val href = a.attr("href")
+            val text = a.text().trim()
+            val parentHtml = a.parent()?.outerHtml()?.take(500) ?: "(no parent)"
+            android.util.Log.d("DoubanRepo", "PERSONAGE[$i]: href=$href, text=[$text], parentHtml=$parentHtml")
+        }
+
+        for (a in personageLinks) {
+            val href = a.attr("href").let { if (it.startsWith("/")) "https://movie.douban.com$it" else it }
+            if (!seenPersonages.add(href)) continue  // 去重
+
+            val linkText = a.text().trim()
+            val titleAttr = a.attr("title").trim()
+            val name = linkText.ifBlank { titleAttr }
+            if (name.isBlank() || name.length > 30) continue  // 过滤导航/更多/返回等
+
+            // 往上爬最多 5 层，找带 img 或 background-image 的祖先节点
+            var avatar = ""
+            var parent = a.parent()
+            var role = ""
+            repeat(5) {
+                if (parent == null) return@repeat
+                // 方式 1：<img data-src=...> 或 <img src=...>
+                val img = parent!!.selectFirst("img")
+                avatar = img?.attr("data-src")?.ifBlank { img.attr("src") }?.trim().orEmpty()
+                // 方式 2：CSS background-image: url(...)  ← 豆瓣 celebrities 页面用这个！
+                if (avatar.isBlank()) {
+                    val bgAvatar = parent!!.selectFirst("div.avatar, [class*='avatar']")?.let { div ->
+                        val style = div.attr("style")
+                        Regex("""url\(["']?(https?://[^"')]+)""").find(style)?.groupValues?.get(1)
+                    }?.trim().orEmpty()
+                    avatar = bgAvatar
+                }
+                // 角色标识
+                if (role.isBlank()) {
+                    role = parent!!.selectFirst(".role, .character, .celebrity-role, [class*='role'], [class*='char']")
+                        ?.text()?.trim().orEmpty()
+                }
+                if (avatar.isNotBlank()) return@repeat
+                parent = parent!!.parent()
+            }
+
+            // 还没找到？直接从 a 标签内找
+            if (avatar.isBlank()) {
+                avatar = a.selectFirst("img")?.attr("data-src")?.ifBlank { a.selectFirst("img")?.attr("src") }.orEmpty().trim()
+            }
+
+            // 头像必须是豆瓣 CDN 上的真实 jpg/webp，跳过空的或导航图
+            val isRealAvatar = avatar.isNotBlank() && (avatar.contains("doubanio.com") || avatar.contains("dgtle.com"))
+            if (name.isNotBlank() && isRealAvatar) {
                 out += CastMember(name = name, role = role, avatarUrl = avatar, doubanUrl = href)
+            } else if (name.isNotBlank()) {
+                // 没头像但有名，debug 一下
+                android.util.Log.d("DoubanRepo", "SKIP: name=[$name], avatar=[$avatar], reason=avatarBlankOrNotCDN")
             }
         }
+
         android.util.Log.d("DoubanRepo", "fetchCelebrities final count=${out.size}, first=${out.firstOrNull()?.name}/${out.firstOrNull()?.role}/img=${out.firstOrNull()?.avatarUrl?.take(60)}")
         return out.take(20)
     }
@@ -468,14 +495,17 @@ class DoubanRepository {
 
                 // === 演职员头像已由并行的 fetchCelebrities 任务填充（详见 getDetail） ===
 
-                // === 预告片（多 selector 兜底） ===
+                // === 预告片（豆瓣 subject 页经常没有，用宽匹配兜底） ===
                 val trailers = mutableListOf<Trailer>()
+
+                // 先试具体 selector
                 val trailerSelectors = listOf(
                     "#related-pic-vid a.gallery-item",
                     "#related-pic-vid a",
                     "a[class*='video-modal']",
-                    "a[href*='video']",
-                    ".related-video a"
+                    ".related-video a",
+                    "#related-pic a[data-video]",
+                    "a[data-video]",
                 )
                 for (sel in trailerSelectors) {
                     val nodes = doc.select(sel)
@@ -486,13 +516,33 @@ class DoubanRepository {
                             val cover = img?.attr("data-src")?.ifBlank { img.attr("src") } ?: ""
                             val videoUrl = a.attr("data-video").ifBlank { a.attr("href") }
                             val title = a.attr("data-video-title").ifBlank { a.attr("title") }
-                            if (videoUrl.isNotBlank() && cover.isNotBlank()) {
+                            if (videoUrl.isNotBlank() && (videoUrl.endsWith(".mp4") || videoUrl.contains("youku") || videoUrl.contains("youtube") || cover.isNotBlank())) {
                                 trailers += Trailer(title, videoUrl, cover)
                             }
                         }
-                        break
+                        if (trailers.isNotEmpty()) break
                     }
                 }
+
+                // 兜底：扫所有 <a> 标签找 video href / data-video
+                if (trailers.isEmpty()) {
+                    val videoLinks = doc.select("a").filter { a ->
+                        val href = a.attr("href")
+                        val dv = a.attr("data-video")
+                        dv.isNotBlank() || href.endsWith(".mp4") || href.contains("youku") || href.contains("youtube") || href.contains("video")
+                    }
+                    android.util.Log.d("DoubanRepo", "TRAILER fallback: ${videoLinks.size} video-like links")
+                    videoLinks.forEach { a ->
+                        val img = a.selectFirst("img")
+                        val cover = img?.attr("data-src")?.ifBlank { img.attr("src") } ?: ""
+                        val videoUrl = a.attr("data-video").ifBlank { a.attr("href") }
+                        val title = a.attr("data-video-title").ifBlank { a.attr("title") }.ifBlank { img?.attr("alt") }.orEmpty()
+                        if (videoUrl.isNotBlank() && videoUrl.startsWith("http")) {
+                            trailers += Trailer(title, videoUrl, cover)
+                        }
+                    }
+                }
+
                 d.trailers = trailers
                 android.util.Log.d("DoubanRepo", "TRAILER final count=${trailers.size}, first cover=${trailers.firstOrNull()?.coverUrl?.take(80)}")
 
