@@ -733,10 +733,10 @@ class DoubanRepository {
                     }
                 }
 
-                // trailer 过滤：title 必须含"预告"或"trailer"才算真预告片
-                val trailerKw = listOf("预告", "trailer", "Trailer", "TRAILER")
+                // trailer 过滤：title 必须含视频相关关键词才算（预告片 / 视频评论 / 花絮 / 片花 / MV 等）
+                val videoKw = listOf("预告", "trailer", "Trailer", "TRAILER", "视频评论", "花絮", "片花", "MV", "mv", "mv评论")
                 val filtered = trailers.filter { t ->
-                    trailerKw.any { kw -> t.title.contains(kw, ignoreCase = true) }
+                    videoKw.any { kw -> t.title.contains(kw, ignoreCase = true) }
                 }
                 d.trailers = filtered
                 android.util.Log.d("DoubanRepo", "TRAILER filter: ${trailers.size} -> ${filtered.size}")

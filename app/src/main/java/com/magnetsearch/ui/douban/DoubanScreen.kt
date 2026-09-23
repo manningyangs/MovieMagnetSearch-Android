@@ -474,7 +474,7 @@ private fun DoubanDetailScreen(
             val trailers = d?.trailers ?: emptyList()
             if (trailers.isNotEmpty()) {
                 item {
-                    Text("预告片", fontWeight = FontWeight.Bold, fontSize = 14.sp,
+                    Text("视频", fontWeight = FontWeight.Bold, fontSize = 14.sp,
                         modifier = Modifier.padding(top = 10.dp, bottom = 4.dp))
                 }
                 item {
