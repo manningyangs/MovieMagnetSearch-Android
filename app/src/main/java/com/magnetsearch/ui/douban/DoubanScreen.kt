@@ -31,6 +31,7 @@ import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
 import androidx.compose.ui.draw.clip
+import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
@@ -681,6 +682,23 @@ private fun DoubanDetailScreen(
                                 settings.userAgentString = "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36"
                                 webViewClient = object : android.webkit.WebViewClient() {
                                     override fun shouldOverrideUrlLoading(view: android.webkit.WebView?, request: android.webkit.WebResourceRequest?) = false
+                                    override fun onPageFinished(view: android.webkit.WebView?, url: String?) {
+                                        super.onPageFinished(view, url)
+                                        // 自动播放：找所有 <video> 标签调 play()
+                                        view?.evaluateJavascript(
+                                            """
+                                            (function() {
+                                                var videos = document.querySelectorAll('video');
+                                                videos.forEach(function(v) {
+                                                    v.muted = false;
+                                                    v.controls = true;
+                                                    var p = v.play();
+                                                    if (p && p.catch) p.catch(function() { v.muted = true; v.play(); });
+                                                });
+                                            })();
+                                            """.trimIndent(), null
+                                        )
+                                    }
                                 }
                             }
                         },
@@ -746,7 +764,11 @@ private fun TrailerCard(trailer: Trailer, onClick: () -> Unit) {
     Box(
         modifier = Modifier.width(160.dp).height(90.dp)
             .clip(RoundedCornerShape(8.dp))
-            .background(Color.Black)
+            .background(
+                Brush.linearGradient(
+                    listOf(Color(0xFF1565C0), Color(0xFF0D47A1), Color(0xFF01579B))
+                )
+            )
             .clickable { onClick() }
     ) {
         if (trailer.coverUrl.isNotBlank()) {
