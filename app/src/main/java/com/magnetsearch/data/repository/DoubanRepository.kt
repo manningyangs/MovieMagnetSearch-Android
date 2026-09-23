@@ -687,10 +687,45 @@ class DoubanRepository {
                     }
                 }
 
-                d.trailers = trailers
-                android.util.Log.d("DoubanRepo", "TRAILER final count=${trailers.size}, first cover=${trailers.firstOrNull()?.coverUrl?.take(80)}")
+                // 再兜底：扫 iframe / data-poster / poster 属性 —— 豆瓣 subject 页底部嵌入 trailer iframe
+                if (trailers.isEmpty() || trailers.all { it.coverUrl.isBlank() }) {
+                    val iframeNodes = doc.select("iframe[src*='video'], iframe[src*='youku'], iframe[src*='qq'], iframe[src*='youtube'], iframe[src*='link2']")
+                    val posterSelector = doc.select("[data-poster], [poster]")
+                    val posterNodesList = mutableListOf<org.jsoup.nodes.Element>()
+                    for (n in posterSelector) {
+                        if (n.attr("data-poster").isNotBlank() || n.attr("poster").isNotBlank()) posterNodesList += n
+                    }
+                    android.util.Log.d("DoubanRepo", "TRAILER iframe=${iframeNodes.size}, posterAttr=${posterNodesList.size}")
+                    iframeNodes.forEach { iframe ->
+                        val src = iframe.attr("src")
+                        var poster = iframe.attr("poster").ifBlank { iframe.attr("data-poster") }
+                        if (poster.isNotBlank() && poster.startsWith("/")) poster = "https://img.doubanio.com$poster"
+                        if (src.isNotBlank()) {
+                            trailers += Trailer("预告片", src, poster)
+                        }
+                    }
+                    // 带 data-poster / poster 的元素：向上找最近的 <a> 拿 href
+                    posterNodesList.forEach { el ->
+                        var cover = el.attr("data-poster").ifBlank { el.attr("poster") }
+                        if (cover.isNotBlank() && cover.startsWith("/")) cover = "https://img.doubanio.com$cover"
+                        // 向上爬最多 5 层找 <a> 父节点
+                        var parentA: org.jsoup.nodes.Element? = null
+                        var cur: org.jsoup.nodes.Node? = el.parent()
+                        for (i in 0..5) {
+                            if (cur == null) break
+                            if (cur is org.jsoup.nodes.Element && cur.tagName() == "a") { parentA = cur; break }
+                            cur = cur.parent()
+                        }
+                        val href = parentA?.attr("href") ?: el.attr("data-video")
+                        if (href.isNotBlank() && cover.isNotBlank() && trailers.none { it.videoUrl == href || it.coverUrl == cover }) {
+                            trailers += Trailer("预告片", href, cover)
+                        }
+                    }
+                }
 
-                // === 剧照（多 selector 兜底） ===
+                d.trailers = trailers
+
+                // === 剧照（多 selector 兜底）——先解析，trailer 可复用 ===
                 val trailerCoverSet = trailers.map { it.coverUrl }.toSet()
                 val stills = mutableListOf<String>()
                 val stillSelectors = listOf(
@@ -710,6 +745,15 @@ class DoubanRepository {
                         break
                     }
                 }
+                // trailer cover 兜底：用第一张剧照当封面
+                val firstStill = stills.firstOrNull()
+                if (firstStill != null) {
+                    d.trailers = d.trailers.map { t ->
+                        if (t.coverUrl.isBlank()) t.copy(coverUrl = firstStill) else t
+                    }
+                }
+                android.util.Log.d("DoubanRepo", "TRAILER final count=${d.trailers.size}, first cover=${d.trailers.firstOrNull()?.coverUrl?.take(80)}")
+
                 d.stills = stills.take(12)
                 android.util.Log.d("DoubanRepo", "STILL final count=${d.stills.size}, first=${d.stills.firstOrNull()?.take(80)}")
 
