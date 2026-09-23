@@ -161,15 +161,15 @@ class DoubanRepository {
         runCatching {
             warmUpCookie()
 
-            // === 三个并行任务：主详情 HTML + 演职员头像 + 影评 ===
-            val detailTask = async {
-                val html = fetchHtml(url) ?: return@async null
-                val realHtml = if (html.contains("载入中") && html.contains("name=\"cha\"")) {
-                    android.util.Log.d("DoubanRepo", "PoW challenge for $doubanId")
-                    solveDoubanPow(html, url) ?: return@async null
-                } else html
-                parseDetailHtml(realHtml, doubanId, url)
+            // === Step 1: 先抓 subject HTML（必须最先！PoW 解完 cookie 才生效）===
+            var html = fetchHtml(url) ?: return@runCatching null
+            if (html.contains("载入中") && html.contains("name=\"cha\"")) {
+                android.util.Log.d("DoubanRepo", "PoW challenge for $doubanId")
+                html = solveDoubanPow(html, url) ?: return@runCatching null
             }
+            val detail = parseDetailHtml(html, doubanId, url) ?: return@runCatching null
+
+            // === Step 2: PoW cookie 已经生效 → 并行拉 celebrities + reviews ===
             val celebrityTask = async {
                 runCatching { fetchCelebrities(doubanId) }.getOrElse { emptyList() }
             }
@@ -177,7 +177,6 @@ class DoubanRepository {
                 runCatching { fetchReviews(doubanId) }.getOrElse { emptyList() }
             }
 
-            val detail = detailTask.await() ?: return@runCatching null
             detail.castMembers = celebrityTask.await()
             detail.reviews = reviewTask.await()
             detail
@@ -233,19 +232,16 @@ class DoubanRepository {
     }
 
     /** 抓取演职员头像：独立页面 /subject/{id}/celebrities。
-     *  subject 详情页本身**不渲染头像**，只有 personage 名字链接。 */
+     *  subject 详情页本身**不渲染头像**，只有 personage 名字链接。
+     *  内置 PoW 兜底：即使 getDetail 已解 PoW，这里再碰一次也能自救。 */
     private fun fetchCelebrities(doubanId: String): List<CastMember> {
-        val url = "https://movie.douban.com/subject/$doubanId/celebrities"
-        val req = Request.Builder().url(url).get()
-            .header("User-Agent", UA)
-            .header("Referer", "https://movie.douban.com/subject/$doubanId/")
-            .build()
-        val resp = HttpClient.douban.newCall(req).execute()
-        if (!resp.isSuccessful) {
-            android.util.Log.d("DoubanRepo", "fetchCelebrities HTTP ${resp.code}")
-            return emptyList()
+        val pageUrl = "https://movie.douban.com/subject/$doubanId/celebrities"
+        var html = fetchHtml(pageUrl) ?: return emptyList()
+        // PoW 兜底
+        if (html.contains("载入中") && html.contains("name=\"cha\"")) {
+            android.util.Log.d("DoubanRepo", "fetchCelebrities got PoW, solving...")
+            html = solveDoubanPow(html, pageUrl) ?: return emptyList()
         }
-        val html = resp.body?.string() ?: return emptyList()
         if (!html.contains("celebrit")) {
             android.util.Log.d("DoubanRepo", "fetchCelebrities: not celebrities page (body head: ${html.take(150)})")
             return emptyList()
