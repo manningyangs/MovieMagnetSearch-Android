@@ -169,15 +169,23 @@ class DoubanRepository {
             }
             val detail = parseDetailHtml(html, doubanId, url) ?: return@runCatching null
 
-            // === Step 2: PoW cookie 已经生效 → 并行拉 celebrities + reviews ===
+            // === Step 2: PoW cookie 已经生效 → 并行拉 celebrities + trailers + reviews ===
             val celebrityTask = async {
                 runCatching { fetchCelebrities(doubanId) }.getOrElse { emptyList() }
+            }
+            val trailerTask = async {
+                runCatching { fetchTrailers(doubanId) }.getOrElse { emptyList() }
             }
             val reviewTask = async {
                 runCatching { fetchReviews(doubanId) }.getOrElse { emptyList() }
             }
 
             detail.castMembers = celebrityTask.await()
+            val trailersFromSubject = detail.trailers  // subject 页里可能也有（少量）
+            val trailersFromVideoPage = trailerTask.await()
+            // 合并去重（按 videoUrl）
+            detail.trailers = (trailersFromSubject + trailersFromVideoPage)
+                .distinctBy { it.videoUrl }
             detail.reviews = reviewTask.await()
             detail
         }.getOrElse { e ->
@@ -186,48 +194,106 @@ class DoubanRepository {
         }
     }
 
-    /** 抓取影评（长评）。runCatching 确保 PoW 或网络失败不会阻塞详情页。 */
-    private fun fetchReviews(doubanId: String): List<DoubanReview> {
-        val url = "https://movie.douban.com/j/subject/$doubanId/reviews?start=0"
-        val req = Request.Builder().url(url)
-            .header("User-Agent", UA)
-            .header("Referer", "https://movie.douban.com/subject/$doubanId/")
-            .header("X-Requested-With", "XMLHttpRequest")
-            .get().build()
-        val resp = HttpClient.douban.newCall(req).execute()
-        if (!resp.isSuccessful) {
-            android.util.Log.d("DoubanRepo", "fetchReviews HTTP ${resp.code}")
-            return emptyList()
+    /** 抓取预告片：独立页面 /subject/{id}/video。
+     *  豆瓣 subject 详情页几乎不渲染预告片 DOM，必须去独立页抓。
+     *  内置 PoW 兜底。 */
+    private fun fetchTrailers(doubanId: String): List<Trailer> {
+        val pageUrl = "https://movie.douban.com/subject/$doubanId/video"
+        var html = fetchHtml(pageUrl) ?: return emptyList()
+        if (html.contains("载入中") && html.contains("name=\"cha\"")) {
+            android.util.Log.d("DoubanRepo", "fetchTrailers got PoW, solving...")
+            html = solveDoubanPow(html, pageUrl) ?: return emptyList()
         }
-        val body = resp.body?.string() ?: return emptyList()
-        android.util.Log.d("DoubanRepo", "fetchReviews body head: ${body.take(300)}")
-        // 返回格式可能是 JSON 数组，也可能是被 PoW 拦截返回的 HTML
-        if (!body.trimStart().startsWith("[")) return emptyList()
-        val arr = JSONArray(body)
+        val doc = Jsoup.parse(html)
+        val out = mutableListOf<Trailer>()
+
+        // 多 selector 兜底找预告片
+        val selectors = listOf(
+            "a[data-video]",
+            "a[data-video-url]",
+            ".gallery-item a",
+            ".video-item a",
+            "a[href*='video']",
+        )
+        for (sel in selectors) {
+            val nodes = doc.select(sel)
+            android.util.Log.d("DoubanRepo", "TRAILER(video page) '$sel' matched ${nodes.size}")
+            if (nodes.isNotEmpty()) {
+                nodes.forEach { a ->
+                    val videoUrl = a.attr("data-video")
+                        .ifBlank { a.attr("data-video-url") }
+                        .ifBlank { a.attr("href") }
+                        .trim().trimEnd(',')
+                    val img = a.selectFirst("img")
+                    val cover = img?.attr("data-src")?.ifBlank { img.attr("src") }?.trim().orEmpty()
+                    val title = a.attr("data-video-title")
+                        .ifBlank { a.attr("title") }
+                        .ifBlank { img?.attr("alt") ?: "" }
+                        .trim()
+                    if (videoUrl.isNotBlank() && videoUrl.startsWith("http")) {
+                        out += Trailer(title = title, videoUrl = videoUrl, coverUrl = cover)
+                    }
+                }
+                if (out.isNotEmpty()) break
+            }
+        }
+
+        // 兜底：扫所有 <iframe src> 和 <video src>
+        if (out.isEmpty()) {
+            doc.select("iframe[src], video[src], source[src]").forEach { el ->
+                val src = el.attr("src").trim()
+                if (src.isNotBlank() && (src.contains(".mp4") || src.contains("youku") || src.contains("youtube") || src.contains("doubanio"))) {
+                    out += Trailer(title = "预告片", videoUrl = src, coverUrl = "")
+                }
+            }
+            android.util.Log.d("DoubanRepo", "TRAILER(video page) iframe/video fallback count=${out.size}")
+        }
+
+        android.util.Log.d("DoubanRepo", "fetchTrailers final count=${out.size}")
+        return out
+    }
+
+    /** 抓取影评（长评）。旧 API /j/subject/{id}/reviews 已 404，
+     *  改从 /subject/{id}/reviews HTML 页面解析。 */
+    private fun fetchReviews(doubanId: String): List<DoubanReview> {
+        val url = "https://movie.douban.com/subject/$doubanId/reviews"
+        var html = fetchHtml(url) ?: return emptyList()
+        if (html.contains("载入中") && html.contains("name=\"cha\"")) {
+            html = solveDoubanPow(html, url) ?: return emptyList()
+        }
+        val doc = Jsoup.parse(html)
         val out = mutableListOf<DoubanReview>()
-        for (i in 0 until arr.length()) {
-            val item = arr.optJSONObject(i) ?: continue
-            val reviewer = item.optJSONObject("reviewer") ?: continue
-            val rTitle = item.optString("title", "").trim()
-            val rContent = item.optString("content", "").trim()
-            if (rTitle.isBlank() && rContent.isBlank()) continue
-            val ratingStr = item.optString("rating", "")
-            val rating = ratingStr.toFloatOrNull()?.div(10f) ?: 0f
-            val alt = reviewer.optString("alt", "")
-            // 跳过外链长影评（alt 里有 /review/ 的才是豆瓣原创）
-            out.add(
-                DoubanReview(
-                    author = reviewer.optString("name", ""),
-                    avatarUrl = reviewer.optString("avatar", ""),
+
+        // 豆瓣长评列表：.review-item / .reviews-list .review-item / #content .review-item
+        val items = doc.select(".review-item, .review-list .review-item, .reviews .review-item")
+        android.util.Log.d("DoubanRepo", "fetchReviews HTML items=${items.size}")
+        for (item in items) {
+            val aTitle = item.selectFirst(".main-bd h2 a, .title a, h3 a") ?: continue
+            val title = aTitle.text().trim()
+            val reviewUrl = aTitle.attr("href").let { if (it.startsWith("/")) "https://movie.douban.com$it" else it }
+            val content = item.selectFirst(".review-short, .review-content, .short-content")?.text()?.trim().orEmpty()
+            val authorNode = item.selectFirst(".reviewer, .author, a[href*='/people/']")
+            val authorName = authorNode?.text()?.trim().orEmpty()
+            val authorUrl = authorNode?.attr("href")?.let { if (it.startsWith("/")) "https://movie.douban.com$it" else it }.orEmpty()
+            val avatar = item.selectFirst(".reviewer img, .author img, .avatar img")?.attr("src").orEmpty()
+            val ratingClass = item.selectFirst(".rating, .star, [class*='star']")?.classNames()?.firstOrNull { it.contains("star") && it.any { c -> c.isDigit() } }.orEmpty()
+            val rating = ratingClass.filter { it.isDigit() }.toFloatOrNull()?.div(10f) ?: 0f
+            val date = item.selectFirst(".main-bd .time, .review-date, .date, span[class*='date']")?.text()?.trim().orEmpty()
+
+            if (title.isNotBlank() || content.isNotBlank()) {
+                out += DoubanReview(
+                    author = authorName,
+                    avatarUrl = avatar,
                     rating = rating,
-                    title = rTitle,
-                    content = rContent,
-                    date = item.optString("time", ""),
-                    doubanUrl = alt
+                    title = title,
+                    content = content,
+                    date = date,
+                    doubanUrl = reviewUrl.ifBlank { authorUrl }
                 )
-            )
+            }
             if (out.size >= 5) break
         }
+        android.util.Log.d("DoubanRepo", "fetchReviews final count=${out.size}")
         return out
     }
 
@@ -262,7 +328,7 @@ class DoubanRepository {
         }
 
         for (a in personageLinks) {
-            val href = a.attr("href").let { if (it.startsWith("/")) "https://movie.douban.com$it" else it }
+            val href = a.attr("href").trimEnd(',').let { if (it.startsWith("/")) "https://movie.douban.com$it" else it }
             if (!seenPersonages.add(href)) continue  // 去重
 
             val linkText = a.text().trim()
