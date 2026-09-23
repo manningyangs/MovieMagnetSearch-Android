@@ -1,3 +1,4 @@
+@file:OptIn(androidx.compose.foundation.ExperimentalFoundationApi::class)
 package com.magnetsearch.ui.douban
 
 import android.content.Intent
@@ -34,7 +35,15 @@ import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
+import androidx.compose.foundation.combinedClickable
 import androidx.compose.ui.platform.LocalContext
+import androidx.compose.ui.platform.LocalClipboardManager
+import androidx.compose.ui.text.AnnotatedString
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.Dispatchers
+import kotlinx.coroutines.launch
+import kotlinx.coroutines.withContext
+import android.widget.Toast
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.compose.ui.res.painterResource
 import androidx.compose.ui.text.font.FontWeight
@@ -633,7 +642,6 @@ private fun DoubanDetailScreen(
         Box(
             Modifier.fillMaxSize()
                 .background(Color.Black.copy(alpha = 0.95f))
-                .clickable(enabled = type == "image") { previewTarget = null }
         ) {
             IconButton(
                 onClick = { previewTarget = null },
@@ -646,9 +654,24 @@ private fun DoubanDetailScreen(
                 "image" -> {
                     val idx = payload.toIntOrNull() ?: return@AnimatedVisibility
                     val url = stills.getOrNull(idx) ?: return@AnimatedVisibility
+                    val context = LocalContext.current
+                    val clipboard = LocalClipboardManager.current
                     AsyncImage(
                         model = url, contentDescription = "剧照",
-                        modifier = Modifier.fillMaxSize().padding(24.dp),
+                        modifier = Modifier
+                            .fillMaxSize().padding(24.dp)
+                            .combinedClickable(
+                                onClick = { previewTarget = null },
+                                onLongClick = {
+                                    saveImageToGallery(context, url) { msg ->
+                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                    }
+                                },
+                                onDoubleClick = {
+                                    clipboard.setText(AnnotatedString(url))
+                                    Toast.makeText(context, "图片链接已复制", Toast.LENGTH_SHORT).show()
+                                }
+                            ),
                         contentScale = ContentScale.Fit
                     )
                     if (idx > 0) {
@@ -954,4 +977,74 @@ private fun formatVoteCount(n: Int): String = when {
     n >= 10_000_000 -> "${n / 1_000_000}百万"
     n >= 10_000 -> "%.1f万".format(n / 10_000.0)
     else -> n.toString()
+}
+
+/** 下载网络图片保存到相册（Android 10+ 用 MediaStore，低版本用 WRITE_EXTERNAL_STORAGE） */
+private fun saveImageToGallery(
+    context: android.content.Context,
+    url: String,
+    onResult: (String) -> Unit
+) {
+    CoroutineScope(Dispatchers.IO).launch {
+        try {
+            val okHttpClient = okhttp3.OkHttpClient.Builder()
+                .connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
+                .readTimeout(30, java.util.concurrent.TimeUnit.SECONDS)
+                .build()
+            val request = okhttp3.Request.Builder()
+                .url(url)
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36")
+                .build()
+            okHttpClient.newCall(request).execute().use { resp ->
+                if (!resp.isSuccessful) {
+                    withContext(Dispatchers.Main) { onResult("下载失败 HTTP ${resp.code}") }
+                    return@launch
+                }
+                val body = resp.body ?: run {
+                    withContext(Dispatchers.Main) { onResult("下载失败：空 body") }
+                    return@launch
+                }
+                val bytes = body.bytes()
+
+                val fileName = "mg_${System.currentTimeMillis()}.jpg"
+                val mimeType = "image/jpeg"
+
+                // Android 10+ (API 29+) 用 MediaStore
+                if (android.os.Build.VERSION.SDK_INT >= android.os.Build.VERSION_CODES.Q) {
+                    val values = android.content.ContentValues().apply {
+                        put(android.provider.MediaStore.Images.Media.DISPLAY_NAME, fileName)
+                        put(android.provider.MediaStore.Images.Media.MIME_TYPE, mimeType)
+                        put(android.provider.MediaStore.Images.Media.RELATIVE_PATH, "Pictures/MovieMagnetSearch")
+                        put(android.provider.MediaStore.Images.Media.IS_PENDING, 1)
+                    }
+                    val uri = context.contentResolver.insert(
+                        android.provider.MediaStore.Images.Media.EXTERNAL_CONTENT_URI, values
+                    ) ?: run {
+                        withContext(kotlinx.coroutines.Dispatchers.Main) { onResult("保存失败：无法创建相册条目") }
+                        return@launch
+                    }
+                    context.contentResolver.openOutputStream(uri)?.use { os ->
+                        os.write(bytes)
+                    }
+                    values.clear()
+                    values.put(android.provider.MediaStore.Images.Media.IS_PENDING, 0)
+                    context.contentResolver.update(uri, values, null, null)
+                    withContext(kotlinx.coroutines.Dispatchers.Main) { onResult("已保存到相册 ✅") }
+                } else {
+                    // Android 9 及以下
+                    val dir = java.io.File(
+                        android.os.Environment.getExternalStoragePublicDirectory(android.os.Environment.DIRECTORY_PICTURES),
+                        "MovieMagnetSearch"
+                    )
+                    if (!dir.exists()) dir.mkdirs()
+                    val file = java.io.File(dir, fileName)
+                    java.io.FileOutputStream(file).use { it.write(bytes) }
+                    context.sendBroadcast(android.content.Intent(android.content.Intent.ACTION_MEDIA_SCANNER_SCAN_FILE, android.net.Uri.fromFile(file)))
+                    withContext(Dispatchers.Main) { onResult("已保存到相册 ✅") }
+                }
+            }
+        } catch (e: Exception) {
+            withContext(Dispatchers.Main) { onResult("保存失败：${e.message}") }
+        }
+    }
 }
