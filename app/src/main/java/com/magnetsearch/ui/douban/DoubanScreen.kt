@@ -36,6 +36,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.gestures.detectHorizontalDragGestures
+import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.platform.LocalClipboardManager
 import androidx.compose.ui.text.AnnotatedString
@@ -660,6 +662,24 @@ private fun DoubanDetailScreen(
                         model = url, contentDescription = "剧照",
                         modifier = Modifier
                             .fillMaxSize().padding(24.dp)
+                            .pointerInput(idx) {
+                                var accumulated = 0f
+                                detectHorizontalDragGestures(
+                                    onHorizontalDrag = { change, dragAmount ->
+                                        change.consume()
+                                        accumulated += dragAmount
+                                    },
+                                    onDragEnd = {
+                                        if (accumulated < -80f && idx < stills.size - 1) {
+                                            previewTarget = "image:${idx + 1}"
+                                        } else if (accumulated > 80f && idx > 0) {
+                                            previewTarget = "image:${idx - 1}"
+                                        }
+                                        accumulated = 0f
+                                    },
+                                    onDragCancel = { accumulated = 0f }
+                                )
+                            }
                             .combinedClickable(
                                 onClick = { previewTarget = null },
                                 onLongClick = {
@@ -993,7 +1013,11 @@ private fun saveImageToGallery(
                 .build()
             val request = okhttp3.Request.Builder()
                 .url(url)
-                .header("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36")
+                .header("User-Agent", "Mozilla/5.0 (Linux; Android 13) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0 Mobile Safari/537.36")
+                .header("Referer", "https://movie.douban.com/")
+                .header("Accept", "image/avif,image/webp,image/apng,image/*,*/*;q=0.8")
+                .header("Accept-Language", "zh-CN,zh;q=0.9")
+                .header("Cache-Control", "no-cache")
                 .build()
             okHttpClient.newCall(request).execute().use { resp ->
                 if (!resp.isSuccessful) {
