@@ -36,6 +36,8 @@ import androidx.compose.ui.graphics.Brush
 import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.foundation.combinedClickable
+import androidx.compose.foundation.pager.HorizontalPager
+import androidx.compose.foundation.pager.rememberPagerState
 import androidx.compose.foundation.gestures.detectHorizontalDragGestures
 import androidx.compose.ui.input.pointer.pointerInput
 import androidx.compose.ui.platform.LocalContext
@@ -654,60 +656,40 @@ private fun DoubanDetailScreen(
 
             when (type) {
                 "image" -> {
-                    val idx = payload.toIntOrNull() ?: return@AnimatedVisibility
-                    val url = stills.getOrNull(idx) ?: return@AnimatedVisibility
+                    val startIdx = payload.toIntOrNull() ?: return@AnimatedVisibility
                     val context = LocalContext.current
                     val clipboard = LocalClipboardManager.current
-                    AsyncImage(
-                        model = url, contentDescription = "剧照",
-                        modifier = Modifier
-                            .fillMaxSize().padding(24.dp)
-                            .pointerInput(idx) {
-                                var accumulated = 0f
-                                detectHorizontalDragGestures(
-                                    onHorizontalDrag = { change, dragAmount ->
-                                        change.consume()
-                                        accumulated += dragAmount
-                                    },
-                                    onDragEnd = {
-                                        if (accumulated < -80f && idx < stills.size - 1) {
-                                            previewTarget = "image:${idx + 1}"
-                                        } else if (accumulated > 80f && idx > 0) {
-                                            previewTarget = "image:${idx - 1}"
-                                        }
-                                        accumulated = 0f
-                                    },
-                                    onDragCancel = { accumulated = 0f }
-                                )
-                            }
-                            .combinedClickable(
-                                onClick = { previewTarget = null },
-                                onLongClick = {
-                                    saveImageToGallery(context, url) { msg ->
-                                        Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
-                                    }
-                                },
-                                onDoubleClick = {
-                                    clipboard.setText(AnnotatedString(url))
-                                    Toast.makeText(context, "图片链接已复制", Toast.LENGTH_SHORT).show()
-                                }
-                            ),
-                        contentScale = ContentScale.Fit
+                    val pagerState = rememberPagerState(
+                        initialPage = startIdx,
+                        pageCount = { stills.size }
                     )
-                    if (idx > 0) {
-                        IconButton(
-                            onClick = { previewTarget = "image:${idx - 1}" },
-                            modifier = Modifier.align(Alignment.CenterStart)
-                        ) { Icon(Icons.Default.ChevronLeft, "上一张", tint = Color.White, modifier = Modifier.size(42.dp)) }
-                    }
-                    if (idx < stills.size - 1) {
-                        IconButton(
-                            onClick = { previewTarget = "image:${idx + 1}" },
-                            modifier = Modifier.align(Alignment.CenterEnd)
-                        ) { Icon(Icons.Default.ChevronRight, "下一张", tint = Color.White, modifier = Modifier.size(42.dp)) }
+                    HorizontalPager(
+                        state = pagerState,
+                        modifier = Modifier.fillMaxSize()
+                    ) { page ->
+                        val url = stills.getOrNull(page) ?: return@HorizontalPager
+                        AsyncImage(
+                            model = url, contentDescription = "剧照",
+                            modifier = Modifier
+                                .fillMaxSize()
+                                .padding(24.dp)
+                                .combinedClickable(
+                                    onClick = { previewTarget = null },
+                                    onLongClick = {
+                                        saveImageToGallery(context, url) { msg ->
+                                            Toast.makeText(context, msg, Toast.LENGTH_SHORT).show()
+                                        }
+                                    },
+                                    onDoubleClick = {
+                                        clipboard.setText(AnnotatedString(url))
+                                        Toast.makeText(context, "图片链接已复制", Toast.LENGTH_SHORT).show()
+                                    }
+                                ),
+                            contentScale = ContentScale.Fit
+                        )
                     }
                     Text(
-                        "${idx + 1} / ${stills.size}",
+                        "${pagerState.currentPage + 1} / ${stills.size}",
                         color = Color.White.copy(alpha = 0.8f), fontSize = 13.sp,
                         modifier = Modifier.align(Alignment.BottomCenter).padding(bottom = 28.dp)
                     )
