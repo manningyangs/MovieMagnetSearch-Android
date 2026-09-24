@@ -1,230 +1,158 @@
 package com.magnetsearch.data.repository
 
-import android.webkit.WebResourceRequest
+import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.magnetsearch.data.model.BiliOwner
 import com.magnetsearch.data.model.BiliStat
 import com.magnetsearch.data.model.BiliVideo
 import kotlinx.coroutines.suspendCancellableCoroutine
-import okhttp3.OkHttpClient
-import okhttp3.Request
 import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.coroutines.resume
+import kotlin.coroutines.resumeWithException
 
-/** B站分区列表仓库 —— 双路降级策略：
+/** B站爬虫 —— 走 WebView 的浏览器环境绕过风控。
  *
- *  1. **直连 API** (优先): api.bilibili.com/x/web-interface/ranking/v2
- *     → 免 wbi 免签名，但 B站 2025 年起对 GFW IP 返回 -352。
+ *  背景：B站 2025+ 风控已覆盖 OkHttp API + 桌面 SSR，仅 WebView（完整浏览器栈）能正常请求。
+ *  本类提供一个 suspend 函数，内部用 WebView + evaluateJavascript 在浏览器环境里
+ *  fetch API，拿到 JSON 后回到原生层解析。
  *
- *  2. **HTML SSR 抓取** (降级): 爬 www.bilibili.com/v/{分区}/ 页面里的
- *     window.__INITIAL_STATE__ JSON —— 和正常浏览器访问完全一样，风控放行。
- *     用 OkHttp 带桌面 Chrome UA + Cookie 先预热再爬。
- *
- *  两个方案都走通后再考虑真正的 WebView + JS Bridge。
+ *  生命周期：
+ *    1. 调用方传入 Activity Context（WebView 需要 Activity 级 context）
+ *    2. 创建临时 WebView，加载 B站 首页（让它拿到 cookie）
+ *    3. evaluateJavascript: fetch('/x/web-interface/ranking/v2?...').then(r=>r.text()).then(t=>BiliBridge.send(t))
+ *    4. BiliBridge 收到 text → suspend 函数 resume
+ *    5. 销毁 WebView
  */
 object BiliRepository {
 
-    private const val API_BASE = "https://api.bilibili.com"
-    private const val WEB_BASE = "https://www.bilibili.com"
-
-    // 桌面 Chrome UA —— 和真实浏览器一样
-    private const val UA_WEB = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
-    // B站 APP UA —— ranking/v2 在某些网络环境下风控更松
-    private const val UA_APP = "BiliDroid/12.0.0 (bb3101000e232e27; android) os/13 mobi_app/android"
-
-    private val client = OkHttpClient.Builder().apply {
-        connectTimeout(15, java.util.concurrent.TimeUnit.SECONDS)
-        readTimeout(20, java.util.concurrent.TimeUnit.SECONDS)
-        followRedirects(true)
-        dns(object : okhttp3.Dns {
-            override fun lookup(hostname: String): List<java.net.InetAddress> {
-                val all = java.net.InetAddress.getAllByName(hostname).toList()
-                val v4 = all.filterIsInstance<java.net.Inet4Address>()
-                return if (v4.isNotEmpty()) v4 else all
-            }
-        })
-    }.build()
-
-    /** 分区名 → (tid, 路径片段) */
-    data class BiliCat(val tid: Int, val path: String)
-
-    fun nameToCat(name: String): BiliCat = when (name) {
-        "热门" -> BiliCat(0, "popular/rank/all")
-        "动画" -> BiliCat(1, "douga")
-        "番剧" -> BiliCat(13, "anime")
-        "国创" -> BiliCat(167, "guochuang")
-        "音乐" -> BiliCat(3, "music")
-        "舞蹈" -> BiliCat(129, "dance")
-        "游戏" -> BiliCat(4, "game")
-        "知识" -> BiliCat(36, "knowledge")
-        "科技" -> BiliCat(188, "tech")
-        "运动" -> BiliCat(234, "sports")
-        "汽车" -> BiliCat(254, "car")
-        "生活" -> BiliCat(160, "life")
-        "美食" -> BiliCat(295, "food")
-        "动物圈" -> BiliCat(217, "animal")
-        "时尚" -> BiliCat(155, "fashion")
-        "资讯" -> BiliCat(207, "information")
-        "娱乐" -> BiliCat(5, "ent")
-        else -> BiliCat(0, "popular/rank/all")
+    /** 分区名 → API rid */
+    fun nameToRid(name: String): Int = when (name) {
+        "首页推荐" -> -1  // 走 recommend 接口
+        "热门" -> 0       // 全站排行
+        "动画" -> 1
+        "番剧" -> 13
+        "国创" -> 167
+        "音乐" -> 3
+        "舞蹈" -> 129
+        "游戏" -> 4
+        "知识" -> 36
+        "科技" -> 188
+        "运动" -> 234
+        "汽车" -> 254
+        "生活" -> 160
+        "美食" -> 295
+        "动物圈" -> 217
+        "时尚" -> 155
+        "资讯" -> 207
+        "娱乐" -> 5
+        else -> 0
     }
 
-    /** 拉视频列表 —— 先试 API，失败降级走 Web + SSR JSON 解析。 */
-    suspend fun fetchVideos(category: String): Result<List<BiliVideo>> =
-        kotlinx.coroutines.withContext(kotlinx.coroutines.Dispatchers.IO) {
-            // 方案 1: 直连 API
-            val apiResult = tryApi(category)
-            if (apiResult.isSuccess && apiResult.getOrNull()?.isNotEmpty() == true) {
-                return@withContext apiResult
-            }
-            // 方案 2: Web SSR 降级
-            tryWeb(category)
-        }
+    /** 通过 WebView fetch API 拿视频列表。
+     *  @param ctx Activity Context（WebView 必须 Activity 级） */
+    suspend fun fetchVideos(
+        ctx: android.content.Context,
+        category: String
+    ): Result<List<BiliVideo>> = suspendCancellableCoroutine { cont ->
 
-    private fun tryApi(category: String): Result<List<BiliVideo>> = runCatching {
-        val cat = nameToCat(category)
-        val req = Request.Builder()
-            .url("$API_BASE/x/web-interface/ranking/v2?rid=${cat.tid}&type=all")
-            .header("User-Agent", UA_APP)
-            .header("Referer", "$WEB_BASE/")
-            .header("Accept", "application/json, text/plain, */*")
-            .header("Accept-Language", "zh-CN,zh;q=0.9")
-            .build()
-
-        val resp = client.newCall(req).execute()
-        if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}")
-        val body = resp.body?.string() ?: throw Exception("empty body")
-        val root = JSONObject(body)
-        if (root.optInt("code") != 0) {
-            throw Exception("API code=${root.optInt("code")} msg=${root.optString("message")}")
-        }
-        val list = root.optJSONObject("data")?.optJSONArray("list") ?: return@runCatching emptyList()
-        parseJsonArray(list)
-    }
-
-    private fun tryWeb(category: String): Result<List<BiliVideo>> = runCatching {
-        val cat = nameToCat(category)
-        val url = if (cat.tid == 0) {
-            "$WEB_BASE/v/${cat.path}"
+        val rid = nameToRid(category)
+        val apiPath = if (rid == -1) {
+            "/x/web-interface/dynamic/recommend?ps=30"
         } else {
-            "$WEB_BASE/v/${cat.path}/"
+            "/x/web-interface/ranking/v2?rid=$rid&type=all"
         }
 
-        // 先请求 B站 首页，让服务器下发 buvid3 cookie（免风控）
-        val warmup = Request.Builder().url(WEB_BASE)
-            .header("User-Agent", UA_WEB).build()
-        client.newCall(warmup).execute().close()
+        val js = """
+            (function() {
+                fetch('https://api.bilibili.com$apiPath', {
+                    credentials: 'include',
+                    headers: {
+                        'Accept': 'application/json, text/plain, */*',
+                        'Referer': 'https://www.bilibili.com/'
+                    }
+                })
+                .then(function(r) { return r.text(); })
+                .then(function(t) {
+                    try { AndroidBridge.onBiliResponse(t); } catch(e) {}
+                })
+                .catch(function(err) {
+                    try { AndroidBridge.onBiliError(String(err)); } catch(e) {}
+                });
+            })();
+        """.trimIndent()
 
-        val req = Request.Builder().url(url)
-            .header("User-Agent", UA_WEB)
-            .header("Accept", "text/html,application/xhtml+xml,application/xml;q=0.9,*/*;q=0.8")
-            .header("Accept-Language", "zh-CN,zh;q=0.9,en;q=0.8")
-            .header("Referer", WEB_BASE)
-            .build()
-
-        val resp = client.newCall(req).execute()
-        if (!resp.isSuccessful) throw Exception("HTTP ${resp.code}")
-        val html = resp.body?.string() ?: throw Exception("empty body")
-
-        // 检查是不是风控页
-        if ("验证码" in html || "-352" in html || "risk-captcha" in html) {
-            throw Exception("B站风控拦截")
+        val webView = WebView(ctx).apply {
+            settings.javaScriptEnabled = true
+            settings.domStorageEnabled = true
+            // 完全透明，用户看不见
+            setBackgroundColor(0)
+            alpha = 0f
         }
 
-        // 从 __NEXT_DATA__ 或 __INITIAL_STATE__ 里提取视频 JSON
-        // B站现代页面用 Next.js: <script id="__NEXT_DATA__" type="application/json">...</script>
-        val nextDataMatch = Regex("""<script id="__NEXT_DATA__"[^>]*>(.*?)</script>""", RegexOption.DOT_MATCHES_ALL)
-            .find(html)
-        if (nextDataMatch != null) {
-            val json = nextDataMatch.groupValues[1]
-            return@runCatching parseNextData(json)
-        }
-
-        // 旧版 __INITIAL_STATE__
-        val stateMatch = Regex("""window\.__INITIAL_STATE__\s*=\s*(\{.*?\});""", RegexOption.DOT_MATCHES_ALL)
-            .find(html)
-        if (stateMatch != null) {
-            val json = stateMatch.groupValues[1]
-            return@runCatching parseLegacyState(json)
-        }
-
-        // 兜底：找页面里所有 card 相关的 JSON
-        throw Exception("页面里没找到视频数据 JSON（可能风控升级了）")
-    }
-
-    /** 解析 B站 Next.js SSR JSON。
-     *  结构: props.pageProps.initialState.seasonArchives[*].item 或者
-     *        props.pageProps.videoCardData[*].item —— 不同分区路径略有差异。 */
-    private fun parseNextData(json: String): List<BiliVideo> {
-        val root = JSONObject(json)
-        val pageProps = root.optJSONObject("props")
-            ?.optJSONObject("pageProps") ?: return emptyList()
-
-        // 尝试多种路径
-        val candidates = listOf(
-            "initialState.seasonArchives",
-            "initialState.videos",
-            "videoCardData",
-            "videoList",
-            "rankList",
-            "archives",
-            "items",
-        )
-
-        for (path in candidates) {
-            val arr = walkPath(pageProps, path) as? JSONArray ?: continue
-            val result = parseJsonArray(arr)
-            if (result.isNotEmpty()) return result
-        }
-        return emptyList()
-    }
-
-    private fun parseLegacyState(json: String): List<BiliVideo> {
-        val root = JSONObject(json)
-        return walkPath(root, "rank.list")?.let {
-            parseJsonArray(it as JSONArray)
-        } ?: emptyList()
-    }
-
-    private fun walkPath(root: JSONObject, path: String): Any? {
-        var cur: Any? = root
-        for (seg in path.split('.')) {
-            cur = when (cur) {
-                is JSONObject -> cur.opt(seg)
-                is JSONArray -> cur.optJSONObject(0)?.opt(seg)
-                else -> return null
+        val bridge = object {
+            @JavascriptInterface
+            fun onBiliResponse(text: String) {
+                if (!cont.isActive) return
+                try {
+                    val videos = parseApiResponse(text, category)
+                    cont.resume(Result.success(videos))
+                } catch (e: Exception) {
+                    cont.resume(Result.failure(e))
+                }
+                webView.post { webView.destroy() }
             }
-            if (cur == null) return null
+
+            @JavascriptInterface
+            fun onBiliError(err: String) {
+                if (!cont.isActive) return
+                cont.resume(Result.failure(Exception("WebView fetch failed: $err")))
+                webView.post { webView.destroy() }
+            }
         }
-        return cur
+
+        webView.addJavascriptInterface(bridge, "AndroidBridge")
+
+        webView.webViewClient = object : WebViewClient() {
+            override fun onPageFinished(view: WebView?, url: String?) {
+                // 页面加载完，等一小下再 fetch（让 cookie 写入完成）
+                view?.postDelayed({
+                    view.evaluateJavascript(js, null)
+                }, 800)
+            }
+        }
+
+        cont.invokeOnCancellation {
+            try { webView.destroy() } catch (_: Exception) {}
+        }
+
+        // 先加载 B站 首页，让浏览器拿到 cookie（buvid3/bili_ticket）
+        webView.loadUrl("https://www.bilibili.com")
     }
 
-    private fun parseJsonArray(arr: JSONArray): List<BiliVideo> {
-        val result = ArrayList<BiliVideo>(arr.length())
-        for (i in 0 until arr.length()) {
-            val obj = arr.optJSONObject(i) ?: continue
-            try {
-                parseVideo(obj)?.let { result.add(it) }
-            } catch (_: Exception) {}
+    private fun parseApiResponse(text: String, category: String): List<BiliVideo> {
+        val root = JSONObject(text)
+        val code = root.optInt("code", -1)
+        if (code != 0) throw Exception("B站风控 $code: ${root.optString("message")}")
+        val data = root.optJSONObject("data") ?: return emptyList()
+
+        val list = data.optJSONArray("list")       // ranking/v2
+            ?: data.optJSONArray("item")            // recommend
+            ?: return emptyList()
+
+        val result = ArrayList<BiliVideo>(list.length())
+        for (i in 0 until list.length()) {
+            val obj = list.optJSONObject(i) ?: continue
+            try { parseVideo(obj)?.let { result.add(it) } } catch (_: Exception) {}
         }
         return result
     }
 
     private fun parseVideo(obj: JSONObject): BiliVideo? {
-        // 兼容两套字段名（API 返回 vs SSR 返回）
-        val bvid = obj.optString("bvid").ifBlank {
-            obj.optString("item")?.let { JSONObject(it).optString("bvid") }
-        }.orEmpty()
-        if (bvid.isBlank()) return null
-
-        val title = obj.optString("title").ifBlank {
-            obj.optString("item")?.let { JSONObject(it).optString("title") }
-        }.orEmpty()
-        val pic = obj.optString("pic").ifBlank {
-            obj.optString("item")?.let { JSONObject(it).optString("pic") }
-        }.orEmpty()
+        val bvid = obj.optString("bvid").ifBlank { return null }
+        val title = obj.optString("title").ifBlank { "未知标题" }
+        val pic = obj.optString("pic")
         val aid = obj.optLong("aid", 0L)
         val tid = obj.optInt("tid", 0)
         val tname = obj.optString("tname", "")

@@ -1,5 +1,6 @@
 package com.magnetsearch.ui.bili
 
+import android.content.Context
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.magnetsearch.data.model.BiliVideo
@@ -24,16 +25,17 @@ class BiliViewModel : ViewModel() {
 
     private var currentCategory: String? = null
     private var loadJob: Job? = null
+    private var currentContext: Context? = null
 
-    fun loadCategory(category: String) {
+    fun loadCategory(ctx: Context, category: String) {
+        currentContext = ctx
         if (category == currentCategory && _list.value.isNotEmpty()) return
         currentCategory = category
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             _state.value = BiliListState.LOADING
             _error.value = null
-            val result = BiliRepository.fetchVideos(category)
-
+            val result = BiliRepository.fetchVideos(ctx, category)
             result.fold(
                 onSuccess = { videos ->
                     _list.value = videos
@@ -45,6 +47,13 @@ class BiliViewModel : ViewModel() {
                 }
             )
         }
+    }
+
+    fun retry() {
+        val ctx = currentContext ?: return
+        val cat = currentCategory ?: return
+        _list.value = emptyList()
+        loadCategory(ctx, cat)
     }
 }
 
