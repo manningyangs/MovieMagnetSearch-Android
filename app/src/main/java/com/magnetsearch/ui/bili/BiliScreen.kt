@@ -1,109 +1,153 @@
 package com.magnetsearch.ui.bili
 
+import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
-import androidx.compose.foundation.background
-import androidx.compose.foundation.clickable
+import android.webkit.WebChromeClient
+import android.webkit.WebResourceRequest
+import android.webkit.WebSettings
+import android.webkit.WebView
+import android.webkit.WebViewClient
+import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.layout.*
 import androidx.compose.foundation.lazy.LazyRow
-import androidx.compose.foundation.lazy.grid.GridCells
-import androidx.compose.foundation.lazy.grid.LazyVerticalGrid
-import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
-import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
+import androidx.compose.material.icons.automirrored.filled.ArrowBack
 import androidx.compose.material.icons.filled.OpenInNew
-import androidx.compose.material.icons.filled.PlayArrow
+import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
 import androidx.compose.ui.Modifier
-import androidx.compose.ui.draw.clip
 import androidx.compose.ui.graphics.Color
-import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
-import androidx.lifecycle.viewmodel.compose.viewModel
-import coil.compose.AsyncImage
-import com.magnetsearch.data.model.BiliVideo
 
-// B站分区顺序（和 Repository.nameToTid 对应）
 private val CATEGORIES = listOf(
-    "热门", "动画", "番剧", "国创", "音乐", "舞蹈", "游戏",
+    "首页", "热门", "动画", "番剧", "国创", "音乐", "舞蹈", "游戏",
     "知识", "科技", "运动", "汽车", "生活", "美食", "动物圈", "时尚", "资讯", "娱乐"
 )
 private val BILI_COLOR = Color(0xFFFB7299)
 
+private fun categoryUrl(cat: String): String = when (cat) {
+    "首页" -> "https://www.bilibili.com"
+    "热门" -> "https://www.bilibili.com/v/popular/rank/all"
+    "动画" -> "https://www.bilibili.com/v/douga/"
+    "番剧" -> "https://www.bilibili.com/v/anime/"
+    "国创" -> "https://www.bilibili.com/v/guochuang/"
+    "音乐" -> "https://www.bilibili.com/v/music/"
+    "舞蹈" -> "https://www.bilibili.com/v/dance/"
+    "游戏" -> "https://www.bilibili.com/v/game/"
+    "知识" -> "https://www.bilibili.com/v/knowledge/"
+    "科技" -> "https://www.bilibili.com/v/tech/"
+    "运动" -> "https://www.bilibili.com/v/sports/"
+    "汽车" -> "https://www.bilibili.com/v/car/"
+    "生活" -> "https://www.bilibili.com/v/life/"
+    "美食" -> "https://www.bilibili.com/v/food/"
+    "动物圈" -> "https://www.bilibili.com/v/animal/"
+    "时尚" -> "https://www.bilibili.com/v/fashion/"
+    "资讯" -> "https://www.bilibili.com/v/information/"
+    "娱乐" -> "https://www.bilibili.com/v/ent/"
+    else -> "https://www.bilibili.com"
+}
+
 @OptIn(ExperimentalMaterial3Api::class)
+@SuppressLint("SetJavaScriptEnabled")
 @Composable
 fun BiliScreen(
-    modifier: Modifier = Modifier,
-    vm: BiliViewModel = viewModel()
+    modifier: Modifier = Modifier
 ) {
-    var selectedCategory by remember { mutableStateOf("热门") }
+    var selectedCategory by remember { mutableStateOf("首页") }
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
-    val videos by vm.list.collectAsState()
-    val state by vm.state.collectAsState()
-    val error by vm.error.collectAsState()
+    var progress by remember { mutableStateOf(0) }
+    var canGoBack by remember { mutableStateOf(false) }
+    var currentTitle by remember { mutableStateOf("B站畅游") }
     val context = androidx.compose.ui.platform.LocalContext.current
+    val webViewRef = remember { mutableStateOf<WebView?>(null) }
 
-    // 首次 + 分类切换时加载
-    LaunchedEffect(selectedCategory) {
-        vm.loadCategory(selectedCategory)
+    // Back：WebView 有历史先 goBack
+    BackHandler(enabled = canGoBack) {
+        webViewRef.value?.goBack()
     }
 
     Column(modifier = modifier.fillMaxSize()) {
-        // 顶栏
         TopAppBar(
-            title = { Text("B站畅游", fontWeight = FontWeight.SemiBold) },
+            title = { Text(currentTitle, fontWeight = FontWeight.SemiBold, maxLines = 1, softWrap = false) },
+            navigationIcon = {
+                IconButton(
+                    onClick = { webViewRef.value?.goBack() },
+                    enabled = canGoBack
+                ) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "后退") }
+            },
             colors = TopAppBarDefaults.topAppBarColors(
                 containerColor = BILI_COLOR.copy(alpha = 0.08f)
             ),
             actions = {
+                IconButton(onClick = { webViewRef.value?.reload() }) {
+                    Icon(Icons.Default.Refresh, "刷新")
+                }
                 IconButton(onClick = { showSearch = !showSearch }) {
                     Icon(Icons.Default.Search, "搜索", tint = BILI_COLOR)
                 }
+                IconButton(onClick = {
+                    webViewRef.value?.let { wv ->
+                        context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(wv.url)))
+                    }
+                }) {
+                    Icon(Icons.Default.OpenInNew, "外部浏览器")
+                }
             }
         )
+
+        // 进度条
+        if (progress in 1..99) {
+            LinearProgressIndicator(
+                progress = { progress / 100f },
+                modifier = Modifier.fillMaxWidth().height(2.dp),
+                color = BILI_COLOR,
+                trackColor = BILI_COLOR.copy(alpha = 0.2f)
+            )
+        }
 
         // 搜索框
         if (showSearch) {
             OutlinedTextField(
                 value = searchQuery,
                 onValueChange = { searchQuery = it },
-                placeholder = { Text("搜索 B 站视频") },
-                modifier = Modifier
-                    .fillMaxWidth()
-                    .padding(horizontal = 16.dp, vertical = 8.dp),
+                placeholder = { Text("搜索视频（在 B 站内）") },
+                modifier = Modifier.fillMaxWidth().padding(horizontal = 16.dp, vertical = 6.dp),
                 singleLine = true,
                 leadingIcon = { Icon(Icons.Default.Search, null, tint = BILI_COLOR) },
                 trailingIcon = {
                     TextButton(onClick = {
                         if (searchQuery.isNotBlank()) {
-                            context.startActivity(Intent(
-                                Intent.ACTION_VIEW,
-                                Uri.parse("https://search.bilibili.com/all?keyword=${Uri.encode(searchQuery)}")
-                            ))
+                            webViewRef.value?.loadUrl(
+                                "https://search.bilibili.com/all?keyword=${Uri.encode(searchQuery)}"
+                            )
+                            showSearch = false
                         }
-                    }) { Text("去 B 站搜", color = BILI_COLOR) }
+                    }) { Text("搜索", color = BILI_COLOR) }
                 }
             )
         }
 
-        // 分类横滑
+        // 分类横滑（点击 → WebView 直接跳对应分区页）
         LazyRow(
-            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 8.dp),
+            contentPadding = PaddingValues(horizontal = 12.dp, vertical = 6.dp),
             horizontalArrangement = Arrangement.spacedBy(8.dp)
         ) {
             items(CATEGORIES) { cat ->
                 FilterChip(
                     selected = cat == selectedCategory,
-                    onClick = { selectedCategory = cat },
+                    onClick = {
+                        selectedCategory = cat
+                        webViewRef.value?.loadUrl(categoryUrl(cat))
+                    },
                     label = { Text(cat, fontSize = 13.sp) },
                     colors = FilterChipDefaults.filterChipColors(
                         selectedContainerColor = BILI_COLOR.copy(alpha = 0.15f),
@@ -113,151 +157,72 @@ fun BiliScreen(
             }
         }
 
-        // 状态指示
-        when (state) {
-            BiliListState.LOADING -> Box(
-                Modifier.fillMaxSize(), contentAlignment = Alignment.Center
-            ) { CircularProgressIndicator(color = BILI_COLOR) }
+        // WebView —— 完整 B 站体验
+        Box(Modifier.fillMaxSize()) {
+            AndroidView(
+                modifier = Modifier.fillMaxSize(),
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        webViewRef.value = this
 
-            BiliListState.ERROR -> Box(
-                Modifier.fillMaxSize(), contentAlignment = Alignment.Center
-            ) {
-                Column(horizontalAlignment = Alignment.CenterHorizontally) {
-                    Text("加载失败", color = Color.Gray)
-                    error?.let { Text(it, fontSize = 12.sp, color = Color.Gray) }
-                    Spacer(Modifier.height(8.dp))
-                    TextButton(onClick = { vm.loadCategory(selectedCategory) }) { Text("重试", color = BILI_COLOR) }
-                }
-            }
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.databaseEnabled = true
+                        settings.mediaPlaybackRequiresUserGesture = false
+                        settings.loadWithOverviewMode = true
+                        settings.useWideViewPort = true
+                        settings.setSupportZoom(true)
+                        settings.builtInZoomControls = true
+                        settings.displayZoomControls = false
+                        settings.cacheMode = WebSettings.LOAD_DEFAULT
+                        settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
+                        settings.allowFileAccess = false
+                        settings.userAgentString =
+                            "Mozilla/5.0 (Linux; Android 14; Pixel 7) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0.0.0 Mobile Safari/537.36"
 
-            BiliListState.SUCCESS, BiliListState.IDLE -> {
-                if (videos.isEmpty()) {
-                    Box(Modifier.fillMaxSize(), contentAlignment = Alignment.Center) {
-                        Text("暂无数据", color = Color.Gray)
-                    }
-                } else {
-                    VideoGrid(
-                        videos = videos,
-                        onVideoClick = { video ->
-                            context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(video.url)))
+                        setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
+                        isHorizontalScrollBarEnabled = false
+                        isVerticalScrollBarEnabled = false
+                        overScrollMode = android.view.View.OVER_SCROLL_ALWAYS
+
+                        // 下载支持
+                        setDownloadListener { url, _, _, _, _ ->
+                            try {
+                                ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url)))
+                            } catch (_: Exception) {}
                         }
-                    )
+
+                        webViewClient = object : WebViewClient() {
+                            override fun shouldOverrideUrlLoading(
+                                view: WebView?,
+                                request: WebResourceRequest?
+                            ): Boolean {
+                                val url = request?.url?.toString() ?: return false
+                                return if (url.startsWith("intent://") || url.startsWith("bili://")) {
+                                    try { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) {}
+                                    true
+                                } else false
+                            }
+                            override fun onPageFinished(view: WebView?, url: String?) {
+                                super.onPageFinished(view, url)
+                                canGoBack = view?.canGoBack() == true
+                            }
+                        }
+
+                        webChromeClient = object : WebChromeClient() {
+                            override fun onProgressChanged(view: WebView?, newProgress: Int) {
+                                progress = newProgress
+                                if (newProgress == 100) progress = 0
+                            }
+                            override fun onReceivedTitle(view: WebView?, title: String?) {
+                                title?.let { currentTitle = it.ifBlank { "B站畅游" } }
+                            }
+                        }
+
+                        loadUrl(categoryUrl(selectedCategory))
+                    }
                 }
-            }
-        }
-    }
-}
-
-@Composable
-private fun VideoGrid(
-    videos: List<BiliVideo>,
-    onVideoClick: (BiliVideo) -> Unit,
-) {
-    LazyVerticalGrid(
-        columns = GridCells.Fixed(2),
-        contentPadding = PaddingValues(12.dp),
-        horizontalArrangement = Arrangement.spacedBy(12.dp),
-        verticalArrangement = Arrangement.spacedBy(12.dp),
-        modifier = Modifier.fillMaxSize()
-    ) {
-        items(videos, key = { it.bvid }) { video ->
-            VideoCard(video, onClick = { onVideoClick(video) })
-        }
-    }
-}
-
-@Composable
-private fun VideoCard(video: BiliVideo, onClick: () -> Unit) {
-    Column(
-        modifier = Modifier
-            .fillMaxWidth()
-            .clip(RoundedCornerShape(10.dp))
-            .clickable(onClick = onClick)
-    ) {
-        // 封面 + 时长角标
-        Box(modifier = Modifier.fillMaxWidth().aspectRatio(16f / 10f)) {
-            AsyncImage(
-                model = video.picHttps,
-                contentDescription = null,
-                modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)),
-                contentScale = ContentScale.Crop
             )
-            // 时长
-            video.duration.takeIf { it > 0 }?.let { sec ->
-                Surface(
-                    modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
-                    color = Color(0xCC000000),
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Text(
-                        text = formatDuration(sec),
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                    )
-                }
-            }
-            // P 数（多 P 视频）
-            if (video.videos > 1) {
-                Surface(
-                    modifier = Modifier.align(Alignment.TopStart).padding(6.dp),
-                    color = BILI_COLOR.copy(alpha = 0.9f),
-                    shape = RoundedCornerShape(4.dp)
-                ) {
-                    Text(
-                        text = "P${video.videos}",
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                    )
-                }
-            }
-        }
-
-        Spacer(Modifier.height(6.dp))
-
-        // 标题（2 行截断）
-        Text(
-            text = video.title,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            lineHeight = 17.sp,
-            color = Color(0xFF222222)
-        )
-
-        Spacer(Modifier.height(3.dp))
-
-        // UP 主 + 播放量
-        Row(
-            modifier = Modifier.fillMaxWidth(),
-            horizontalArrangement = Arrangement.SpaceBetween,
-            verticalAlignment = Alignment.CenterVertically
-        ) {
-            Text(
-                text = video.owner.name,
-                fontSize = 11.sp,
-                color = Color.Gray,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false)
-            )
-            Spacer(Modifier.width(4.dp))
-            Row(verticalAlignment = Alignment.CenterVertically) {
-                Icon(
-                    Icons.Default.PlayArrow, null,
-                    modifier = Modifier.size(11.dp),
-                    tint = Color.Gray
-                )
-                Spacer(Modifier.width(2.dp))
-                Text(
-                    text = formatPlayCount(video.stat.view),
-                    fontSize = 11.sp,
-                    color = Color.Gray
-                )
-            }
         }
     }
 }

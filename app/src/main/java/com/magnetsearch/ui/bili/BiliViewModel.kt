@@ -32,9 +32,7 @@ class BiliViewModel : ViewModel() {
         loadJob = viewModelScope.launch {
             _state.value = BiliListState.LOADING
             _error.value = null
-            val result = BiliRepository.nameToTid(category)?.let { tid ->
-                BiliRepository.fetchRanking(tid)
-            } ?: BiliRepository.fetchRecommend()
+            val result = BiliRepository.fetchVideos(category)
 
             result.fold(
                 onSuccess = { videos ->
