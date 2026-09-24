@@ -1,6 +1,6 @@
 package com.magnetsearch.ui.bili
 
-import android.content.Context
+import android.webkit.WebView
 import androidx.lifecycle.ViewModel
 import androidx.lifecycle.viewModelScope
 import com.magnetsearch.data.model.BiliVideo
@@ -25,17 +25,21 @@ class BiliViewModel : ViewModel() {
 
     private var currentCategory: String? = null
     private var loadJob: Job? = null
-    private var currentContext: Context? = null
+    private var webView: WebView? = null
 
-    fun loadCategory(ctx: Context, category: String) {
-        currentContext = ctx
+    fun attachWebView(wv: WebView) {
+        webView = wv
+    }
+
+    fun loadCategory(category: String) {
+        val wv = webView ?: return
         if (category == currentCategory && _list.value.isNotEmpty()) return
         currentCategory = category
         loadJob?.cancel()
         loadJob = viewModelScope.launch {
             _state.value = BiliListState.LOADING
             _error.value = null
-            val result = BiliRepository.fetchVideos(ctx, category)
+            val result = BiliRepository.fetchVideosOnWebView(wv, category)
             result.fold(
                 onSuccess = { videos ->
                     _list.value = videos
@@ -50,25 +54,22 @@ class BiliViewModel : ViewModel() {
     }
 
     fun retry() {
-        val ctx = currentContext ?: return
         val cat = currentCategory ?: return
         _list.value = emptyList()
-        loadCategory(ctx, cat)
+        loadCategory(cat)
     }
 }
 
-/** 格式化播放量：1.2万 / 3.4亿 */
+/** 格式化播放量 */
 fun formatPlayCount(n: Long): String = when {
     n >= 100_000_000 -> "%.1f亿".format(n / 100_000_000.0)
     n >= 10_000 -> "%.1f万".format(n / 10_000.0)
     else -> n.toString()
 }
 
-/** 格式化时长：12:34 / 1:23:45 */
+/** 格式化时长 */
 fun formatDuration(sec: Int): String {
     if (sec <= 0) return ""
-    val h = sec / 3600
-    val m = (sec % 3600) / 60
-    val s = sec % 60
+    val h = sec / 3600; val m = (sec % 3600) / 60; val s = sec % 60
     return if (h > 0) "%d:%02d:%02d".format(h, m, s) else "%d:%02d".format(m, s)
 }

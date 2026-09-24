@@ -3,34 +3,30 @@ package com.magnetsearch.data.repository
 import android.webkit.JavascriptInterface
 import android.webkit.WebView
 import android.webkit.WebViewClient
+import android.util.Log
 import com.magnetsearch.data.model.BiliOwner
 import com.magnetsearch.data.model.BiliStat
 import com.magnetsearch.data.model.BiliVideo
 import kotlinx.coroutines.suspendCancellableCoroutine
-import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-/** B站爬虫 —— 走 WebView 的浏览器环境绕过风控。
+/** B站爬虫 —— 在 WebView 上 evaluateJavascript 跑 fetch API 拿数据。
  *
- *  背景：B站 2025+ 风控已覆盖 OkHttp API + 桌面 SSR，仅 WebView（完整浏览器栈）能正常请求。
- *  本类提供一个 suspend 函数，内部用 WebView + evaluateJavascript 在浏览器环境里
- *  fetch API，拿到 JSON 后回到原生层解析。
+ *  关键：WebView 必须已经被 attach 到 Activity 的 window（由 UI 层保证），
+ *  否则 postDelayed / evaluateJavascript 里的消息队列不会处理。
  *
- *  生命周期：
- *    1. 调用方传入 Activity Context（WebView 需要 Activity 级 context）
- *    2. 创建临时 WebView，加载 B站 首页（让它拿到 cookie）
- *    3. evaluateJavascript: fetch('/x/web-interface/ranking/v2?...').then(r=>r.text()).then(t=>BiliBridge.send(t))
- *    4. BiliBridge 收到 text → suspend 函数 resume
- *    5. 销毁 WebView
+ *  桌面 UA + www.bilibili.com（不是 m.bilibili.com）→ fetch api.bilibili.com 同源，无 CORS。
  */
 object BiliRepository {
 
+    private const val TAG = "BiliRepo"
+
     /** 分区名 → API rid */
     fun nameToRid(name: String): Int = when (name) {
-        "首页推荐" -> -1  // 走 recommend 接口
-        "热门" -> 0       // 全站排行
+        "首页推荐" -> -1
+        "热门" -> 0
         "动画" -> 1
         "番剧" -> 13
         "国创" -> 167
@@ -50,96 +46,108 @@ object BiliRepository {
         else -> 0
     }
 
-    /** 通过 WebView fetch API 拿视频列表。
-     *  @param ctx Activity Context（WebView 必须 Activity 级） */
-    suspend fun fetchVideos(
-        ctx: android.content.Context,
+    /** 桌面 Chrome UA —— 让 WebView 留在 www.bilibili.com（不跳 m.bilibili.com）。 */
+    val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
+
+    /** 在已 attach 的 WebView 上 fetch 视频列表。 */
+    suspend fun fetchVideosOnWebView(
+        webView: WebView,
         category: String
     ): Result<List<BiliVideo>> = suspendCancellableCoroutine { cont ->
 
         val rid = nameToRid(category)
-        val apiPath = if (rid == -1) {
-            "/x/web-interface/dynamic/recommend?ps=30"
+        val apiUrl = if (rid == -1) {
+            "https://api.bilibili.com/x/web-interface/dynamic/recommend?ps=30"
         } else {
-            "/x/web-interface/ranking/v2?rid=$rid&type=all"
+            "https://api.bilibili.com/x/web-interface/ranking/v2?rid=$rid&type=all"
         }
 
+        // JS：fetch API + 控制台日志 + AndroidBridge 回调
         val js = """
             (function() {
-                fetch('https://api.bilibili.com$apiPath', {
-                    credentials: 'include',
-                    headers: {
-                        'Accept': 'application/json, text/plain, */*',
-                        'Referer': 'https://www.bilibili.com/'
-                    }
-                })
-                .then(function(r) { return r.text(); })
-                .then(function(t) {
-                    try { AndroidBridge.onBiliResponse(t); } catch(e) {}
-                })
-                .catch(function(err) {
-                    try { AndroidBridge.onBiliError(String(err)); } catch(e) {}
-                });
+                try {
+                    console.log('[BiliRepo] fetch start: $apiUrl');
+                    fetch('$apiUrl', {
+                        credentials: 'include',
+                        headers: { 'Accept': 'application/json, text/plain, */*' }
+                    })
+                    .then(function(r) {
+                        console.log('[BiliRepo] fetch status=' + r.status + ' ok=' + r.ok);
+                        return r.text();
+                    })
+                    .then(function(t) {
+                        console.log('[BiliRepo] text len=' + t.length);
+                        try { AndroidBridge.onResult(t); }
+                        catch(e) { console.log('[BiliRepo] bridge err: ' + e.message); }
+                    })
+                    .catch(function(err) {
+                        console.log('[BiliRepo] fetch FAIL: ' + err);
+                        try { AndroidBridge.onError(String(err)); } catch(e2) {}
+                    });
+                } catch(e) {
+                    console.log('[BiliRepo] outer err: ' + e.message);
+                    try { AndroidBridge.onError(String(e.message)); } catch(e2) {}
+                }
             })();
         """.trimIndent()
 
-        val webView = WebView(ctx).apply {
-            settings.javaScriptEnabled = true
-            settings.domStorageEnabled = true
-            // 完全透明，用户看不见
-            setBackgroundColor(0)
-            alpha = 0f
-        }
-
         val bridge = object {
             @JavascriptInterface
-            fun onBiliResponse(text: String) {
+            fun onResult(text: String) {
+                Log.d(TAG, "onResult len=${text.length} head=${text.take(120)}")
                 if (!cont.isActive) return
                 try {
-                    val videos = parseApiResponse(text, category)
+                    val videos = parseApiResponse(text)
+                    Log.d(TAG, "parsed ${videos.size} videos")
                     cont.resume(Result.success(videos))
                 } catch (e: Exception) {
+                    Log.e(TAG, "parse failed", e)
                     cont.resume(Result.failure(e))
                 }
-                webView.post { webView.destroy() }
             }
 
             @JavascriptInterface
-            fun onBiliError(err: String) {
+            fun onError(err: String) {
+                Log.e(TAG, "onError: $err")
                 if (!cont.isActive) return
-                cont.resume(Result.failure(Exception("WebView fetch failed: $err")))
-                webView.post { webView.destroy() }
+                cont.resume(Result.failure(Exception("fetch failed: $err")))
             }
         }
 
+        // 每次 fetch 都重新 set bridge（之前的可能已被 GC）
         webView.addJavascriptInterface(bridge, "AndroidBridge")
 
-        webView.webViewClient = object : WebViewClient() {
-            override fun onPageFinished(view: WebView?, url: String?) {
-                // 页面加载完，等一小下再 fetch（让 cookie 写入完成）
-                view?.postDelayed({
-                    view.evaluateJavascript(js, null)
-                }, 800)
+        // 先检查 WebView 当前 URL —— 如果已经在 www.bilibili.com 且 cookie 已 warmup，直接 fetch
+        // 否则先 loadUrl 预热
+        val currentUrl = webView.url
+        if (currentUrl?.startsWith("https://www.bilibili.com") == true) {
+            Log.d(TAG, "already on bilibili, fetching directly")
+            webView.evaluateJavascript(js) { result ->
+                Log.d(TAG, "eval immediate result=$result")
             }
+        } else {
+            webView.webViewClient = object : WebViewClient() {
+                override fun onPageFinished(v: WebView?, url: String?) {
+                    Log.d(TAG, "page finished: $url, waiting 1.5s for cookies")
+                    v?.postDelayed({
+                        Log.d(TAG, "running evaluateJavascript now")
+                        v.evaluateJavascript(js) { r -> Log.d(TAG, "eval result=$r") }
+                    }, 1500)
+                }
+            }
+            Log.d(TAG, "loading www.bilibili.com for cookie warmup")
+            webView.loadUrl("https://www.bilibili.com")
         }
 
-        cont.invokeOnCancellation {
-            try { webView.destroy() } catch (_: Exception) {}
-        }
-
-        // 先加载 B站 首页，让浏览器拿到 cookie（buvid3/bili_ticket）
-        webView.loadUrl("https://www.bilibili.com")
+        cont.invokeOnCancellation { /* WebView 不关，UI 层管 */ }
     }
 
-    private fun parseApiResponse(text: String, category: String): List<BiliVideo> {
+    private fun parseApiResponse(text: String): List<BiliVideo> {
         val root = JSONObject(text)
         val code = root.optInt("code", -1)
-        if (code != 0) throw Exception("B站风控 $code: ${root.optString("message")}")
+        if (code != 0) throw Exception("B站风控 code=$code msg=${root.optString("message")}")
         val data = root.optJSONObject("data") ?: return emptyList()
-
-        val list = data.optJSONArray("list")       // ranking/v2
-            ?: data.optJSONArray("item")            // recommend
-            ?: return emptyList()
+        val list = data.optJSONArray("list") ?: data.optJSONArray("item") ?: return emptyList()
 
         val result = ArrayList<BiliVideo>(list.length())
         for (i in 0 until list.length()) {
@@ -158,7 +166,6 @@ object BiliRepository {
         val tname = obj.optString("tname", "")
         val pubdate = obj.optLong("pubdate", 0L)
         val duration = obj.optInt("duration", 0)
-        val desc = obj.optString("desc", "")
         val videos = obj.optInt("videos", 1)
 
         val owner = obj.optJSONObject("owner") ?: JSONObject()
@@ -171,12 +178,9 @@ object BiliRepository {
         val stat = obj.optJSONObject("stat")
         val biliStat = if (stat != null) {
             BiliStat(
-                view = stat.optLong("view", 0),
-                danmaku = stat.optLong("danmaku", 0),
-                reply = stat.optLong("reply", 0),
-                favorite = stat.optLong("favorite", 0),
-                coin = stat.optLong("coin", 0),
-                share = stat.optLong("share", 0),
+                view = stat.optLong("view", 0), danmaku = stat.optLong("danmaku", 0),
+                reply = stat.optLong("reply", 0), favorite = stat.optLong("favorite", 0),
+                coin = stat.optLong("coin", 0), share = stat.optLong("share", 0),
                 like = stat.optLong("like", 0),
             )
         } else {
@@ -187,7 +191,7 @@ object BiliRepository {
         return BiliVideo(
             bvid = bvid, aid = aid, title = title, pic = pic,
             tid = tid, tname = tname, pubdate = pubdate, duration = duration,
-            desc = desc, owner = biliOwner, stat = biliStat, videos = videos,
+            desc = obj.optString("desc", ""), owner = biliOwner, stat = biliStat, videos = videos,
         )
     }
 }

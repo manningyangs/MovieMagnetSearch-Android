@@ -2,6 +2,8 @@ package com.magnetsearch.ui.bili
 
 import android.content.Intent
 import android.net.Uri
+import android.webkit.WebView
+import android.webkit.WebSettings
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
 import androidx.compose.foundation.layout.*
@@ -24,13 +26,14 @@ import androidx.compose.ui.graphics.Color
 import androidx.compose.ui.layout.ContentScale
 import androidx.compose.ui.platform.LocalContext
 import androidx.compose.ui.text.font.FontWeight
-import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.text.style.TextOverflow
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
+import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
 import com.magnetsearch.data.model.BiliVideo
+import com.magnetsearch.data.repository.BiliRepository
 
 private val CATEGORIES = listOf(
     "热门", "动画", "番剧", "国创", "音乐", "舞蹈", "游戏",
@@ -39,6 +42,7 @@ private val CATEGORIES = listOf(
 private val BILI_COLOR = Color(0xFFFB7299)
 
 @OptIn(ExperimentalMaterial3Api::class)
+@androidx.compose.material3.ExperimentalMaterial3Api
 @Composable
 fun BiliScreen(
     modifier: Modifier = Modifier,
@@ -52,12 +56,8 @@ fun BiliScreen(
     val error by vm.error.collectAsState()
     val context = LocalContext.current
 
-    // 分类切换 → 触发 WebView + JS fetch 抓数据
-    LaunchedEffect(selectedCategory) {
-        vm.loadCategory(context, selectedCategory)
-    }
-
     Column(modifier = modifier.fillMaxSize()) {
+        // 顶栏
         TopAppBar(
             title = { Text("B站畅游", fontWeight = FontWeight.SemiBold) },
             colors = TopAppBarDefaults.topAppBarColors(
@@ -113,8 +113,33 @@ fun BiliScreen(
             }
         }
 
-        // 状态区
+        // 主内容区：透明 WebView（后台 fetch）+ 原生封面网格（前景）
         Box(Modifier.fillMaxSize()) {
+
+            // === invisible WebView（后台 fetch API，用户完全看不见） ===
+            AndroidView(
+                modifier = Modifier
+                    .matchParentSize()
+                    .clip(RoundedCornerShape(0.dp))
+                    .background(Color.Transparent),
+                factory = { ctx ->
+                    WebView(ctx).apply {
+                        settings.javaScriptEnabled = true
+                        settings.domStorageEnabled = true
+                        settings.cacheMode = WebSettings.LOAD_DEFAULT
+                        // 桌面 UA —— 留在 www.bilibili.com，不跳 m 站
+                        settings.userAgentString = BiliRepository.DESKTOP_UA
+                        // 完全透明
+                        setBackgroundColor(0)
+                        alpha = 0f
+                        // attach 到 window 后交给 ViewModel 管理
+                        vm.attachWebView(this)
+                    }
+                },
+                update = { /* WebView 只创建一次 */ }
+            )
+
+            // === 前景：原生 UI ===
             when (state) {
                 BiliListState.LOADING -> CircularProgressIndicator(
                     color = BILI_COLOR,
@@ -127,16 +152,19 @@ fun BiliScreen(
                     Text("加载失败", color = Color.Gray, fontSize = 14.sp)
                     error?.let { Text(it, fontSize = 12.sp, color = Color.Gray, modifier = Modifier.padding(top = 2.dp)) }
                     Spacer(Modifier.height(12.dp))
-                    FilledTonalButton(onClick = { vm.retry() }, colors = ButtonDefaults.filledTonalButtonColors(containerColor = BILI_COLOR.copy(alpha = 0.15f))) {
+                    FilledTonalButton(
+                        onClick = { vm.retry() },
+                        colors = ButtonDefaults.filledTonalButtonColors(containerColor = BILI_COLOR.copy(alpha = 0.15f))
+                    ) {
                         Icon(Icons.Default.Refresh, null, modifier = Modifier.size(16.dp))
                         Spacer(Modifier.width(6.dp))
                         Text("重试", color = BILI_COLOR)
                     }
                 }
                 BiliListState.SUCCESS, BiliListState.IDLE -> {
-                    if (videos.isEmpty()) {
+                    if (videos.isEmpty() && state == BiliListState.SUCCESS) {
                         Text("暂无视频", color = Color.Gray, modifier = Modifier.align(Alignment.Center))
-                    } else {
+                    } else if (videos.isNotEmpty()) {
                         VideoGrid(
                             videos = videos,
                             onVideoClick = { video ->
@@ -147,6 +175,11 @@ fun BiliScreen(
                 }
             }
         }
+    }
+
+    // 分类切换 → 触发 WebView + fetch
+    LaunchedEffect(selectedCategory) {
+        vm.loadCategory(selectedCategory)
     }
 }
 
@@ -176,7 +209,6 @@ private fun VideoCard(video: BiliVideo, onClick: () -> Unit) {
             .clip(RoundedCornerShape(10.dp))
             .clickable(onClick = onClick)
     ) {
-        // 封面 + 角标
         Box(modifier = Modifier.fillMaxWidth().aspectRatio(16f / 10f)) {
             AsyncImage(
                 model = video.picHttps,
@@ -184,66 +216,41 @@ private fun VideoCard(video: BiliVideo, onClick: () -> Unit) {
                 modifier = Modifier.fillMaxSize().clip(RoundedCornerShape(10.dp)),
                 contentScale = ContentScale.Crop
             )
-            // 时长
             video.duration.takeIf { it > 0 }?.let { sec ->
                 Surface(
                     modifier = Modifier.align(Alignment.BottomEnd).padding(6.dp),
-                    color = Color(0xCC000000),
-                    shape = RoundedCornerShape(4.dp)
+                    color = Color(0xCC000000), shape = RoundedCornerShape(4.dp)
                 ) {
-                    Text(
-                        text = formatDuration(sec),
-                        color = Color.White,
-                        fontSize = 11.sp,
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                    )
+                    Text(formatDuration(sec), color = Color.White, fontSize = 11.sp,
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
                 }
             }
-            // 多 P
             if (video.videos > 1) {
                 Surface(
                     modifier = Modifier.align(Alignment.TopStart).padding(6.dp),
-                    color = BILI_COLOR.copy(alpha = 0.92f),
-                    shape = RoundedCornerShape(4.dp)
+                    color = BILI_COLOR.copy(alpha = 0.92f), shape = RoundedCornerShape(4.dp)
                 ) {
-                    Text(
-                        text = "P${video.videos}",
-                        color = Color.White,
-                        fontSize = 11.sp,
+                    Text("P${video.videos}", color = Color.White, fontSize = 11.sp,
                         fontWeight = FontWeight.Bold,
-                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp)
-                    )
+                        modifier = Modifier.padding(horizontal = 5.dp, vertical = 2.dp))
                 }
             }
         }
-
         Spacer(Modifier.height(6.dp))
-
         Text(
-            text = video.title,
-            maxLines = 2,
-            overflow = TextOverflow.Ellipsis,
-            fontSize = 13.sp,
-            fontWeight = FontWeight.Medium,
-            lineHeight = 17.sp,
-            color = Color(0xFF1F1F1F)
+            text = video.title, maxLines = 2, overflow = TextOverflow.Ellipsis,
+            fontSize = 13.sp, fontWeight = FontWeight.Medium,
+            lineHeight = 17.sp, color = Color(0xFF1F1F1F)
         )
-
         Spacer(Modifier.height(3.dp))
-
         Row(
             modifier = Modifier.fillMaxWidth(),
             horizontalArrangement = Arrangement.SpaceBetween,
             verticalAlignment = Alignment.CenterVertically
         ) {
-            Text(
-                text = video.owner.name,
-                fontSize = 11.sp,
-                color = Color.Gray,
-                maxLines = 1,
-                overflow = TextOverflow.Ellipsis,
-                modifier = Modifier.weight(1f, fill = false)
-            )
+            Text(video.owner.name, fontSize = 11.sp, color = Color.Gray,
+                maxLines = 1, overflow = TextOverflow.Ellipsis,
+                modifier = Modifier.weight(1f, fill = false))
             Spacer(Modifier.width(4.dp))
             Row(verticalAlignment = Alignment.CenterVertically) {
                 Icon(Icons.Default.PlayArrow, null, modifier = Modifier.size(11.dp), tint = Color.Gray)
