@@ -8,190 +8,180 @@ import com.magnetsearch.data.model.BiliOwner
 import com.magnetsearch.data.model.BiliStat
 import com.magnetsearch.data.model.BiliVideo
 import kotlinx.coroutines.suspendCancellableCoroutine
+import org.json.JSONArray
 import org.json.JSONObject
 import kotlin.coroutines.resume
 import kotlin.coroutines.resumeWithException
 
-/** B站爬虫 —— 在 WebView 上 evaluateJavascript 跑 fetch API 拿数据。
+/** B站爬虫 —— WebView 渲染分区页后从 DOM 抓取视频卡片数据。
  *
- *  关键：WebView 必须已经被 attach 到 Activity 的 window（由 UI 层保证），
- *  否则 postDelayed / evaluateJavascript 里的消息队列不会处理。
- *
- *  桌面 UA + www.bilibili.com（不是 m.bilibili.com）→ fetch api.bilibili.com 同源，无 CORS。
+ *  为什么不走 API：
+ *    OkHttp → -352（无浏览器指纹）
+ *    WebView fetch API → -352（GFW 标记了当前 IP 段）
+ *  为什么 DOM 抓取能通：
+ *    WebView 加载 https://www.bilibili.com/v/{分区}/
+ *    → CSR 渲染时 B站 前端 JS 自己调 API（完整浏览器 cookie + 同源 + Chromium 指纹）
+ *    → API 返回成功，视频卡片渲染到 DOM
+ *    → 我们 evaluateJavascript 从 DOM 里 querySelectorAll 拿数据
  */
 object BiliRepository {
 
     private const val TAG = "BiliRepo"
 
-    /** 分区名 → API rid */
-    fun nameToRid(name: String): Int = when (name) {
-        "首页推荐" -> -1
-        "热门" -> 0
-        "动画" -> 1
-        "番剧" -> 13
-        "国创" -> 167
-        "音乐" -> 3
-        "舞蹈" -> 129
-        "游戏" -> 4
-        "知识" -> 36
-        "科技" -> 188
-        "运动" -> 234
-        "汽车" -> 254
-        "生活" -> 160
-        "美食" -> 295
-        "动物圈" -> 217
-        "时尚" -> 155
-        "资讯" -> 207
-        "娱乐" -> 5
-        else -> 0
+    /** 分区名 → 分区 URL 路径 */
+    fun nameToPath(name: String): String = when (name) {
+        "首页推荐" -> "/"
+        "热门" -> "/v/popular/rank/all"
+        "动画" -> "/v/douga/"
+        "番剧" -> "/v/anime/"
+        "国创" -> "/v/guochuang/"
+        "音乐" -> "/v/music/"
+        "舞蹈" -> "/v/dance/"
+        "游戏" -> "/v/game/"
+        "知识" -> "/v/knowledge/"
+        "科技" -> "/v/tech/"
+        "运动" -> "/v/sports/"
+        "汽车" -> "/v/car/"
+        "生活" -> "/v/life/"
+        "美食" -> "/v/food/"
+        "动物圈" -> "/v/animal/"
+        "时尚" -> "/v/fashion/"
+        "资讯" -> "/v/information/"
+        "娱乐" -> "/v/ent/"
+        else -> "/"
     }
 
-    /** 桌面 Chrome UA —— 让 WebView 留在 www.bilibili.com（不跳 m.bilibili.com）。 */
+    /** 桌面 Chrome UA —— 让 WebView 留在 www.bilibili.com（不跳 m 站）。 */
     val DESKTOP_UA = "Mozilla/5.0 (Windows NT 10.0; Win64; x64) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/120.0.0.0 Safari/537.36"
 
-    /** 在已 attach 的 WebView 上 fetch 视频列表。 */
-    suspend fun fetchVideosOnWebView(
+    /** 在 WebView 上渲染分区页 + DOM 抓取视频数据。 */
+    suspend fun scrapeVideosFromDom(
         webView: WebView,
         category: String
     ): Result<List<BiliVideo>> = suspendCancellableCoroutine { cont ->
 
-        val rid = nameToRid(category)
-        val apiUrl = if (rid == -1) {
-            "https://api.bilibili.com/x/web-interface/dynamic/recommend?ps=30"
-        } else {
-            "https://api.bilibili.com/x/web-interface/ranking/v2?rid=$rid&type=all"
-        }
+        val path = nameToPath(category)
+        val fullUrl = "https://www.bilibili.com$path"
 
-        // JS：fetch API + 控制台日志 + AndroidBridge 回调
-        val js = """
+        // DOM 抓取 JS：兼容 B站 不同页面结构
+        val scrapeJS = """
             (function() {
-                try {
-                    console.log('[BiliRepo] fetch start: $apiUrl');
-                    fetch('$apiUrl', {
-                        credentials: 'include',
-                        headers: { 'Accept': 'application/json, text/plain, */*' }
-                    })
-                    .then(function(r) {
-                        console.log('[BiliRepo] fetch status=' + r.status + ' ok=' + r.ok);
-                        return r.text();
-                    })
-                    .then(function(t) {
-                        console.log('[BiliRepo] text len=' + t.length);
-                        try { AndroidBridge.onResult(t); }
-                        catch(e) { console.log('[BiliRepo] bridge err: ' + e.message); }
-                    })
-                    .catch(function(err) {
-                        console.log('[BiliRepo] fetch FAIL: ' + err);
-                        try { AndroidBridge.onError(String(err)); } catch(e2) {}
+                // 尝试多种可能的视频卡片选择器（B站结构经常变）
+                var selectors = [
+                    '.video-card', '.video-list-item', '.feed-card',
+                    '.rank-item', '.popular-video-item', '.recommended-swipe',
+                    '[class*="video-list"] a[href*="/video/"]',
+                    'a[href*="/video/BV"]'
+                ];
+                var seen = new Set();
+                var results = [];
+
+                selectors.forEach(function(sel) {
+                    document.querySelectorAll(sel).forEach(function(el) {
+                        // 从 a 标签 href 提取 bvid
+                        var link = el.tagName === 'A' ? el : el.querySelector('a[href*="/video/"]');
+                        if (!link) return;
+                        var href = link.getAttribute('href') || '';
+                        var bvidMatch = href.match(/BV[\w]+/);
+                        if (!bvidMatch) return;
+                        var bvid = bvidMatch[0];
+                        if (seen.has(bvid)) return;
+                        seen.add(bvid);
+
+                        // 标题
+                        var titleEl = el.querySelector('.title, .video-title, h3, [title]') || link;
+                        var title = (titleEl.getAttribute('title') || titleEl.textContent || '').trim();
+                        if (!title) return;
+
+                        // 封面
+                        var img = el.querySelector('img');
+                        var pic = '';
+                        if (img) {
+                            pic = img.getAttribute('data-src') || img.getAttribute('data-lazy-src') || img.getAttribute('src') || '';
+                        }
+                        // 如果 pic 是相对路径，补全
+                        if (pic && pic.startsWith('//')) pic = 'https:' + pic;
+
+                        results.push({bvid: bvid, title: title, pic: pic});
                     });
-                } catch(e) {
-                    console.log('[BiliRepo] outer err: ' + e.message);
-                    try { AndroidBridge.onError(String(e.message)); } catch(e2) {}
-                }
+                });
+
+                console.log('[BiliRepo] DOM scrape found ' + results.length + ' videos');
+                try { AndroidBridge.onResult(JSON.stringify(results)); }
+                catch(e) { console.log('[BiliRepo] bridge err: ' + e.message); }
             })();
         """.trimIndent()
 
         val bridge = object {
             @JavascriptInterface
             fun onResult(text: String) {
-                Log.d(TAG, "onResult len=${text.length} head=${text.take(120)}")
+                Log.d(TAG, "DOM scrape result len=${text.length}")
                 if (!cont.isActive) return
                 try {
-                    val videos = parseApiResponse(text)
-                    Log.d(TAG, "parsed ${videos.size} videos")
+                    val jsonArr = JSONArray(text)
+                    val videos = ArrayList<BiliVideo>(jsonArr.length())
+                    for (i in 0 until jsonArr.length()) {
+                        val obj = jsonArr.optJSONObject(i) ?: continue
+                        val bvid = obj.optString("bvid")
+                        val title = obj.optString("title")
+                        val pic = obj.optString("pic")
+                        if (bvid.isBlank() || title.isBlank()) continue
+                        videos.add(BiliVideo(
+                            bvid = bvid, aid = 0, title = title, pic = pic,
+                            tid = 0, tname = "", pubdate = 0, duration = 0,
+                            desc = "",
+                            owner = BiliOwner(0, "", ""),
+                            stat = BiliStat(0, 0, 0, 0, 0, 0, 0),
+                            videos = 1
+                        ))
+                    }
+                    Log.d(TAG, "parsed ${videos.size} videos from DOM")
                     cont.resume(Result.success(videos))
                 } catch (e: Exception) {
-                    Log.e(TAG, "parse failed", e)
+                    Log.e(TAG, "DOM parse failed", e)
                     cont.resume(Result.failure(e))
                 }
             }
-
             @JavascriptInterface
             fun onError(err: String) {
-                Log.e(TAG, "onError: $err")
+                Log.e(TAG, "DOM scrape error: $err")
                 if (!cont.isActive) return
-                cont.resume(Result.failure(Exception("fetch failed: $err")))
+                cont.resume(Result.failure(Exception("DOM scrape failed: $err")))
             }
         }
 
-        // 每次 fetch 都重新 set bridge（之前的可能已被 GC）
         webView.addJavascriptInterface(bridge, "AndroidBridge")
 
-        // 先检查 WebView 当前 URL —— 如果已经在 www.bilibili.com 且 cookie 已 warmup，直接 fetch
-        // 否则先 loadUrl 预热
-        val currentUrl = webView.url
-        if (currentUrl?.startsWith("https://www.bilibili.com") == true) {
-            Log.d(TAG, "already on bilibili, fetching directly")
-            webView.evaluateJavascript(js) { result ->
-                Log.d(TAG, "eval immediate result=$result")
-            }
+        val currentUrl = webView.url ?: ""
+        val alreadyOnPath = currentUrl.contains(path.trim('/')) && currentUrl.startsWith("https://www.bilibili.com")
+        if (alreadyOnPath) {
+            Log.d(TAG, "already on $currentUrl, scraping directly")
         } else {
+            // 否则重新加载
             webView.webViewClient = object : WebViewClient() {
                 override fun onPageFinished(v: WebView?, url: String?) {
-                    Log.d(TAG, "page finished: $url, waiting 1.5s for cookies")
-                    v?.postDelayed({
-                        Log.d(TAG, "running evaluateJavascript now")
-                        v.evaluateJavascript(js) { r -> Log.d(TAG, "eval result=$r") }
-                    }, 1500)
+                    Log.d(TAG, "page finished: $url, will scrape after CSR render")
+                    // B站 CSR 需要时间渲染卡片——等 4 秒让前端 JS 跑完 + API 返回 + DOM 生成
+                    scrapeAfterDelay(webView, scrapeJS, 4000)
                 }
             }
-            Log.d(TAG, "loading www.bilibili.com for cookie warmup")
-            webView.loadUrl("https://www.bilibili.com")
+            Log.d(TAG, "loading $fullUrl for DOM scrape")
+            webView.loadUrl(fullUrl)
         }
 
-        cont.invokeOnCancellation { /* WebView 不关，UI 层管 */ }
+        // 兜底：如果 WebView 已经在目标路径（已走 alreadyOnPath），需要发一次 scrape
+        // webViewClient.onPageFinished 里也会调用 scrapeAfterDelay，两边都会跑
+        if (alreadyOnPath) {
+            scrapeAfterDelay(webView, scrapeJS, 1500)
+        }
+
+        cont.invokeOnCancellation { /* WebView 不关 */ }
     }
 
-    private fun parseApiResponse(text: String): List<BiliVideo> {
-        val root = JSONObject(text)
-        val code = root.optInt("code", -1)
-        if (code != 0) throw Exception("B站风控 code=$code msg=${root.optString("message")}")
-        val data = root.optJSONObject("data") ?: return emptyList()
-        val list = data.optJSONArray("list") ?: data.optJSONArray("item") ?: return emptyList()
-
-        val result = ArrayList<BiliVideo>(list.length())
-        for (i in 0 until list.length()) {
-            val obj = list.optJSONObject(i) ?: continue
-            try { parseVideo(obj)?.let { result.add(it) } } catch (_: Exception) {}
-        }
-        return result
-    }
-
-    private fun parseVideo(obj: JSONObject): BiliVideo? {
-        val bvid = obj.optString("bvid").ifBlank { return null }
-        val title = obj.optString("title").ifBlank { "未知标题" }
-        val pic = obj.optString("pic")
-        val aid = obj.optLong("aid", 0L)
-        val tid = obj.optInt("tid", 0)
-        val tname = obj.optString("tname", "")
-        val pubdate = obj.optLong("pubdate", 0L)
-        val duration = obj.optInt("duration", 0)
-        val videos = obj.optInt("videos", 1)
-
-        val owner = obj.optJSONObject("owner") ?: JSONObject()
-        val biliOwner = BiliOwner(
-            mid = owner.optLong("mid", 0),
-            name = owner.optString("name", "匿名"),
-            face = owner.optString("face", ""),
-        )
-
-        val stat = obj.optJSONObject("stat")
-        val biliStat = if (stat != null) {
-            BiliStat(
-                view = stat.optLong("view", 0), danmaku = stat.optLong("danmaku", 0),
-                reply = stat.optLong("reply", 0), favorite = stat.optLong("favorite", 0),
-                coin = stat.optLong("coin", 0), share = stat.optLong("share", 0),
-                like = stat.optLong("like", 0),
-            )
-        } else {
-            BiliStat(view = obj.optLong("play", 0), danmaku = 0, reply = 0,
-                favorite = 0, coin = 0, share = 0, like = 0)
-        }
-
-        return BiliVideo(
-            bvid = bvid, aid = aid, title = title, pic = pic,
-            tid = tid, tname = tname, pubdate = pubdate, duration = duration,
-            desc = obj.optString("desc", ""), owner = biliOwner, stat = biliStat, videos = videos,
-        )
+    private fun scrapeAfterDelay(webView: WebView, js: String, delayMs: Long) {
+        webView.postDelayed({
+            Log.d(TAG, "evaluating DOM scrape JS")
+            webView.evaluateJavascript(js) { r -> Log.d(TAG, "DOM scrape eval result=$r") }
+        }, delayMs)
     }
 }

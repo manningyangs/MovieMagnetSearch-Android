@@ -39,7 +39,7 @@ class BiliViewModel : ViewModel() {
         loadJob = viewModelScope.launch {
             _state.value = BiliListState.LOADING
             _error.value = null
-            val result = BiliRepository.fetchVideosOnWebView(wv, category)
+            val result = BiliRepository.scrapeVideosFromDom(wv, category)
             result.fold(
                 onSuccess = { videos ->
                     _list.value = videos
