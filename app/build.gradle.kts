@@ -11,8 +11,8 @@ android {
         applicationId = "com.magnetsearch"
         minSdk = 24
         targetSdk = 34
-        versionCode = 2
-        versionName = "1.1.1"
+        versionCode = 3
+        versionName = "1.3.0"
     }
 
     // Release 签名 —— 用 debug keystore 快速打包（正式发布请换成自有 keystore）
@@ -106,6 +106,12 @@ dependencies {
 
     // DataStore (alternative to SharedPreferences)
     implementation("androidx.datastore:datastore-preferences:1.0.0")
+
+    // Media3 —— ExoPlayer 原生视频播放 + DASH/HLS + 自定义数据源
+    implementation("androidx.media3:media3-exoplayer:1.3.1")
+    implementation("androidx.media3:media3-exoplayer-dash:1.3.1")
+    implementation("androidx.media3:media3-ui:1.3.1")
+    implementation("androidx.media3:media3-datasource:1.3.1")
 
     // Debug
     debugImplementation("androidx.compose.ui:ui-tooling")

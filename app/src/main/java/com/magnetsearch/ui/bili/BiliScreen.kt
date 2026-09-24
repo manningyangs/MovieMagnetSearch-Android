@@ -5,11 +5,9 @@ package com.magnetsearch.ui.bili
 import android.annotation.SuppressLint
 import android.content.Intent
 import android.net.Uri
-import android.webkit.WebChromeClient
-import android.webkit.WebResourceRequest
+import android.webkit.CookieManager
 import android.webkit.WebSettings
 import android.webkit.WebView
-import android.webkit.WebViewClient
 import androidx.activity.compose.BackHandler
 import androidx.compose.foundation.background
 import androidx.compose.foundation.clickable
@@ -21,11 +19,10 @@ import androidx.compose.foundation.lazy.grid.items
 import androidx.compose.foundation.lazy.items
 import androidx.compose.foundation.shape.RoundedCornerShape
 import androidx.compose.material.icons.Icons
-import androidx.compose.material.icons.automirrored.filled.ArrowBack
-import androidx.compose.material.icons.filled.OpenInNew
 import androidx.compose.material.icons.filled.PlayArrow
 import androidx.compose.material.icons.filled.Refresh
 import androidx.compose.material.icons.filled.Search
+import androidx.compose.material.icons.filled.Person
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -41,6 +38,7 @@ import androidx.compose.ui.unit.sp
 import androidx.compose.ui.viewinterop.AndroidView
 import androidx.lifecycle.viewmodel.compose.viewModel
 import coil.compose.AsyncImage
+import com.magnetsearch.data.api.BiliPlayUrlApi
 import com.magnetsearch.data.model.BiliVideo
 import com.magnetsearch.data.repository.BiliRepository
 
@@ -60,12 +58,23 @@ fun BiliScreen(
     var showSearch by remember { mutableStateOf(false) }
     var searchQuery by remember { mutableStateOf("") }
     var playingVideo by remember { mutableStateOf<BiliVideo?>(null) }
+    var showLogin by remember { mutableStateOf(false) }
+    var isLoggedIn by remember { mutableStateOf(BiliPlayUrlApi.isLoggedIn()) }
     val videos by vm.list.collectAsState()
     val state by vm.state.collectAsState()
     val error by vm.error.collectAsState()
     val context = LocalContext.current
 
+    // 定期刷新登录状态
+    LaunchedEffect(Unit) {
+        while (true) {
+            isLoggedIn = BiliPlayUrlApi.isLoggedIn()
+            kotlinx.coroutines.delay(5000)
+        }
+    }
+
     BackHandler(enabled = playingVideo != null) { playingVideo = null }
+    BackHandler(enabled = showLogin) { showLogin = false }
 
     Box(modifier = modifier.fillMaxSize()) {
         // ========== 背景：列表页 ==========
@@ -74,6 +83,25 @@ fun BiliScreen(
                 title = { Text("B站畅游", fontWeight = FontWeight.SemiBold) },
                 colors = TopAppBarDefaults.topAppBarColors(containerColor = BILI_COLOR.copy(alpha = 0.08f)),
                 actions = {
+                    // 登录状态 / 登录按钮
+                    if (isLoggedIn) {
+                        TextButton(
+                            onClick = {
+                                // 登出：清 Cookie
+                                CookieManager.getInstance().removeAllCookies(null)
+                                CookieManager.getInstance().flush()
+                                isLoggedIn = false
+                            }
+                        ) {
+                            Text("已登录 · 退出", color = BILI_COLOR, fontSize = 12.sp)
+                        }
+                    } else {
+                        TextButton(onClick = { showLogin = true }) {
+                            Icon(Icons.Default.Person, null, tint = BILI_COLOR, modifier = Modifier.size(16.dp))
+                            Spacer(Modifier.width(4.dp))
+                            Text("登录", color = BILI_COLOR, fontSize = 13.sp)
+                        }
+                    }
                     IconButton(onClick = { vm.retry() }) { Icon(Icons.Default.Refresh, "刷新", tint = BILI_COLOR) }
                     IconButton(onClick = { showSearch = !showSearch }) { Icon(Icons.Default.Search, "搜索", tint = BILI_COLOR) }
                 }
@@ -153,89 +181,21 @@ fun BiliScreen(
             }
         }
 
-        // ========== 前景：全屏视频播放器 ==========
+        // ========== 前景：原生视频播放器 (ExoPlayer) ==========
         playingVideo?.let { video ->
-            FullScreenVideoPlayer(video = video, onClose = { playingVideo = null })
+            BiliPlayerScreen(video = video, onClose = { playingVideo = null })
+        }
+
+        // ========== 前景：B站登录页 ==========
+        if (showLogin) {
+            BiliLoginScreen(
+                onClose = { showLogin = false },
+                onLoggedIn = { isLoggedIn = true }
+            )
         }
     }
 
     LaunchedEffect(selectedCategory) { vm.loadCategory(selectedCategory) }
-}
-
-/** 全屏视频播放 —— 可见 WebView 加载 BV 页面 + 原生 TopAppBar 叠在上面 */
-@SuppressLint("SetJavaScriptEnabled")
-@Composable
-private fun FullScreenVideoPlayer(
-    video: BiliVideo,
-    onClose: () -> Unit
-) {
-    val context = LocalContext.current
-    var progress by remember { mutableStateOf(0) }
-    val videoUrl = "https://www.bilibili.com/video/${video.bvid}"
-
-    Box(Modifier.fillMaxSize().background(Color.Black)) {
-        AndroidView(
-            modifier = Modifier.fillMaxSize(),
-            factory = { ctx ->
-                WebView(ctx).apply {
-                    settings.javaScriptEnabled = true
-                    settings.domStorageEnabled = true
-                    settings.mediaPlaybackRequiresUserGesture = false
-                    settings.loadWithOverviewMode = true
-                    settings.useWideViewPort = true
-                    settings.mixedContentMode = WebSettings.MIXED_CONTENT_COMPATIBILITY_MODE
-                    settings.setSupportZoom(true)
-                    settings.builtInZoomControls = true
-                    settings.displayZoomControls = false
-                    settings.userAgentString = BiliRepository.DESKTOP_UA
-                    setLayerType(android.view.View.LAYER_TYPE_HARDWARE, null)
-                    isHorizontalScrollBarEnabled = false
-                    isVerticalScrollBarEnabled = false
-                    overScrollMode = android.view.View.OVER_SCROLL_ALWAYS
-
-                    setDownloadListener { url, _, _, _, _ ->
-                        try { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(url))) } catch (_: Exception) {}
-                    }
-
-                    webViewClient = object : WebViewClient() {
-                        override fun shouldOverrideUrlLoading(v: WebView?, r: WebResourceRequest?): Boolean {
-                            val u = r?.url?.toString() ?: return false
-                            if (u.startsWith("intent://") || u.startsWith("bili://")) {
-                                try { ctx.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(u))) } catch (_: Exception) {}
-                                return true
-                            }
-                            return false
-                        }
-                    }
-                    webChromeClient = object : WebChromeClient() {
-                        override fun onProgressChanged(v: WebView?, p: Int) {
-                            progress = p; if (p == 100) progress = 0
-                        }
-                    }
-                    loadUrl(videoUrl)
-                }
-            }
-        )
-
-        if (progress in 1..99) {
-            LinearProgressIndicator(
-                progress = { progress / 100f },
-                modifier = Modifier.fillMaxWidth().align(Alignment.TopCenter).height(2.dp),
-                color = BILI_COLOR, trackColor = BILI_COLOR.copy(alpha = 0.2f)
-            )
-        }
-
-        TopAppBar(
-            title = { Text(video.title, maxLines = 1, softWrap = false, color = Color.White, fontWeight = FontWeight.SemiBold, fontSize = 15.sp) },
-            navigationIcon = { IconButton(onClick = onClose) { Icon(Icons.AutoMirrored.Filled.ArrowBack, "返回", tint = Color.White) } },
-            actions = {
-                IconButton(onClick = { context.startActivity(Intent(Intent.ACTION_VIEW, Uri.parse(videoUrl))) }) {
-                    Icon(Icons.Default.OpenInNew, "浏览器打开", tint = Color.White)
-                }
-            },
-            colors = TopAppBarDefaults.topAppBarColors(containerColor = Color.Transparent)
-        )
-    }
 }
 
 @Composable

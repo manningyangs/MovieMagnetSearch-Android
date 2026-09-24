@@ -127,8 +127,8 @@ fun DoubanScreen(
                     )
                     Button(
                         onClick = { if (searchText.isNotBlank()) vm.search(searchText) },
-                        modifier = Modifier.height(50.dp),
-                        shape = RoundedCornerShape(14.dp),
+                        modifier = Modifier.height(40.dp),
+                        shape = RoundedCornerShape(10.dp),
                         colors = ButtonDefaults.buttonColors(containerColor = Primary)
                     ) {
                         Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp))
